@@ -1,0 +1,45 @@
+@import "tailwindcss";
+
+@theme inline {
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+@theme {
+  --color-paper: #f6f5f1;
+  --color-card: #ffffff;
+  --color-ink: #1b1d1f;
+  --color-muted: #6a6f73;
+  --color-line: #e3e1da;
+  --color-accent: #0e6b5c;
+  --color-accent-soft: #e2f0ec;
+  --color-warn: #a45c07;
+  --color-warn-soft: #fcf0dc;
+  --color-danger: #b42318;
+  --color-danger-soft: #fdecea;
+}
+
+body {
+  background: var(--color-paper);
+  color: var(--color-ink);
+}
+
+/* Shared form controls */
+@utility field {
+  @apply w-full rounded-lg border border-line bg-card px-3 py-2.5 text-base text-ink outline-none transition
+    placeholder:text-muted/70 focus:border-accent focus:ring-2 focus:ring-accent/20;
+}
+
+@utility btn {
+  @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-semibold transition
+    disabled:cursor-not-allowed disabled:opacity-50;
+}
+@utility btn-primary {
+  @apply btn bg-accent text-white hover:bg-accent/90 active:bg-accent/80;
+}
+@utility btn-secondary {
+  @apply btn border border-line bg-card text-ink hover:bg-paper;
+}
+@utility btn-danger {
+  @apply btn border border-danger/30 bg-card text-danger hover:bg-danger-soft;
+}

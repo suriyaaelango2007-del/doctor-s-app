@@ -117,16 +117,22 @@ export default function AppointmentPage() {
             ) : (
               <ul className="divide-y divide-line text-sm">
                 {appt.calls.map((c) => (
-                  <li key={c.id} className="flex items-center justify-between gap-3 py-2">
-                    <span>
-                      Attempt {c.attempt || "—"}
-                      {c.started_at && <span className="text-muted"> · {formatDateTime(c.started_at)}</span>}
-                      {c.duration_seconds != null && (
-                        <span className="text-muted"> · {Math.round(c.duration_seconds / 60)} min</span>
-                      )}
-                      {c.failure_reason && <span className="block text-muted">{c.failure_reason}</span>}
-                    </span>
-                    <CallBadge status={c.status} />
+                  <li key={c.id} className="py-2">
+                    <div className="flex items-center justify-between gap-3">
+                      <span>
+                        {c.attempt ? `${c.attempt} attempt${c.attempt === 1 ? "" : "s"}` : "Not started"}
+                        {c.started_at && <span className="text-muted"> · last {formatDateTime(c.started_at)}</span>}
+                        {c.duration_seconds != null && (
+                          <span className="text-muted"> · {formatDuration(c.duration_seconds)}</span>
+                        )}
+                      </span>
+                      <CallBadge status={c.status} />
+                    </div>
+                    {c.failure_reason && <p className="mt-1 text-muted">{c.failure_reason}</p>}
+                    {c.next_retry_at && (
+                      <p className="mt-1 text-muted">Retrying at {formatDateTime(c.next_retry_at)}</p>
+                    )}
+                    <Transcript transcript={c.transcript} />
                   </li>
                 ))}
               </ul>
@@ -135,6 +141,49 @@ export default function AppointmentPage() {
         </div>
       )}
     </main>
+  );
+}
+
+interface TranscriptTurn {
+  role: "user" | "agent";
+  message?: string | null;
+  time_in_call_secs?: number;
+}
+
+function formatDuration(secs: number): string {
+  const m = Math.floor(secs / 60);
+  const s = secs % 60;
+  return m ? `${m}m ${s}s` : `${s}s`;
+}
+
+function Transcript({ transcript }: { transcript: unknown }) {
+  const turns = (Array.isArray(transcript) ? (transcript as TranscriptTurn[]) : []).filter((t) =>
+    t.message?.trim(),
+  );
+  if (!turns.length) return null;
+  return (
+    <details className="mt-2">
+      <summary className="cursor-pointer text-sm font-medium text-accent select-none">
+        Transcript ({turns.length} messages)
+      </summary>
+      <ol className="mt-3 space-y-2">
+        {turns.map((t, i) => (
+          <li key={i} className={`flex ${t.role === "user" ? "justify-end" : "justify-start"}`}>
+            <div
+              className={`max-w-[85%] rounded-2xl px-3 py-2 ${
+                t.role === "user" ? "bg-accent-soft text-ink" : "bg-paper text-ink"
+              }`}
+            >
+              <p className="mb-0.5 text-xs font-medium text-muted">
+                {t.role === "user" ? "Patient" : "AI assistant"}
+                {t.time_in_call_secs != null && ` · ${formatDuration(t.time_in_call_secs)}`}
+              </p>
+              <p className="whitespace-pre-wrap">{t.message}</p>
+            </div>
+          </li>
+        ))}
+      </ol>
+    </details>
   );
 }
 

@@ -19,6 +19,12 @@ MAX_CALL_ATTEMPTS = 2
 
 SLOT_GENERATION = time(0, 5)
 
+# Call queue (spec §8)
+CALL_WORKER_SECONDS = 30
+STUCK_CALL_CHECK_MINUTES = 5
+STUCK_CALL_AFTER_MINUTES = 15
+WEBHOOK_TOLERANCE_SECONDS = 30 * 60  # matches the ElevenLabs SDK
+
 # Specialty questions injected into the AI agent prompt and the fallback form.
 SPECIALTY_QUESTIONS: dict[str, list[str]] = {
     "dermatology": [

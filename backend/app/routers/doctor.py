@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 
 from app import time_rules
 from app.auth import CurrentDoctor
+from app.jobs.scheduler import kick_call_worker
 from app.services import booking
 
 router = APIRouter(prefix="/api/doctor", tags=["doctor"])
@@ -82,7 +83,9 @@ def get_appointment(appointment_id: UUID, doctor: CurrentDoctor) -> dict[str, An
 
 @router.post("/appointments/{appointment_id}/confirm")
 def confirm(appointment_id: UUID, doctor: CurrentDoctor):
-    return booking.confirm(appointment_id, doctor["id"])
+    result = booking.confirm(appointment_id, doctor["id"])
+    kick_call_worker()  # spec: the AI call is queued immediately on confirm
+    return result
 
 
 @router.post("/appointments/{appointment_id}/reject")

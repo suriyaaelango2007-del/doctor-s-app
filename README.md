@@ -17,7 +17,7 @@ patient to collect their problem before the visit. Full spec: [clinic-ai-v1-buil
 | 2 | Booking flow | ✅ |
 | 3 | Doctor dashboard | ✅ |
 | 4 | Emails + scheduled jobs (18:30 reminder, 19:00 auto-cancel) | ✅ |
-| 5 | ElevenLabs call | — (confirm already queues a `calls` row) |
+| 5 | ElevenLabs call (queue worker, webhook, retries, missed-webhook recovery) | ✅ code + tests; needs your ElevenLabs keys |
 | 6 | Summary + compliance | — (prompts in `backend/app/prompts/`) |
 | 7 | Retry + form fallback | — |
 | 8 | Hardening (rate limits, retention, Tamil testing) | — |
@@ -55,6 +55,43 @@ npm run dev
 - Patient booking: http://localhost:3000/book
 - Doctor dashboard: http://localhost:3000/doctor
 
+## AI calls (ElevenLabs) — milestone 5
+
+How it works: **Confirm** → a `calls` row is queued → the call worker (every 30 s, and immediately on confirm)
+starts the call through ElevenLabs → ElevenLabs posts the result to `/api/webhooks/elevenlabs` →
+the call becomes **Call done** (patient spoke, transcript saved) or **No answer** (retried after 15 min if it can
+still start by 19:50; otherwise handed to the form fallback in milestone 7). A job every 5 minutes asks ElevenLabs
+about calls stuck in *Calling* for 15+ minutes, in case a webhook was missed.
+
+Without ElevenLabs keys the app works as before and confirmed calls simply stay **Call queued**.
+
+### One-time setup
+1. **Phone number.** Get an Exotel or Plivo number with a SIP trunk, then in ElevenLabs → *Phone Numbers* →
+   *Import from SIP trunk*. Copy the phone number id → `ELEVENLABS_PHONE_NUMBER_ID`.
+2. **Agent.** ElevenLabs → *Agents* → *New agent*.
+   - System prompt: paste `backend/app/prompts/agent_system_prompt.md`.
+   - First message: `Hello, this is the AI assistant from {{clinic_name}}, calling about your appointment with {{doctor_name}} at {{appointment_time}}.`
+   - Languages: English (default) + Tamil + Hindi. Test Tamil with real speakers.
+   - The backend sends these dynamic variables: `patient_name`, `doctor_name`, `clinic_name`,
+     `appointment_time`, `language`, `specialty_questions`, `appointment_id`, `call_id`.
+   - Copy the agent id → `ELEVENLABS_AGENT_ID`.
+3. **API key.** ElevenLabs → *Developers → API keys* → `ELEVENLABS_API_KEY`.
+4. **Webhook.** ElevenLabs → *Agents platform settings → Webhooks*: add
+   `https://<your-backend>/api/webhooks/elevenlabs`, enable **post-call transcription** and
+   **call initiation failure**, and copy the secret → `ELEVENLABS_WEBHOOK_SECRET`.
+5. Set `MAX_CONCURRENT_CALLS` to your plan's concurrency limit.
+
+### Testing webhooks on your laptop
+ElevenLabs needs a public HTTPS URL. Run a tunnel next to the backend:
+```bash
+cloudflared tunnel --url http://localhost:8000     # or: ngrok http 8000
+```
+and use the printed `https://….trycloudflare.com/api/webhooks/elevenlabs` as the webhook URL
+(the address changes every time you restart the tunnel).
+
+Calls only start **the day before the visit, until 19:50 IST**, so during the day just book and confirm a slot
+for tomorrow. After 19:50 (or 18:00 for booking), shift the clock with `TIME_OFFSET_MINUTES` (see below).
+
 ## Daily timeline (IST, day before the visit)
 All in `backend/app/config.py`; every check lives in `backend/app/time_rules.py`.
 
@@ -63,8 +100,9 @@ All in `backend/app/config.py`; every check lives in `backend/app/time_rules.py`
 | 00:05 | Tomorrow's slots generated from the weekly schedule (also on startup) |
 | until 18:00 | Patients book tomorrow's slots |
 | 18:30 | Doctor gets a reminder email if anything is pending |
-| until 19:00 | Doctor confirms / rejects; confirm queues the AI call |
+| until 19:00 | Doctor confirms / rejects; confirm starts the AI call |
 | 19:00 | Remaining pending bookings → `AUTO_CANCELLED`, patient emailed (also catches up on startup) |
+| until 19:50 | Calls and retries may start; no call starts after 19:50 |
 
 **Testing the deadlines by hand:** set `TIME_OFFSET_MINUTES` in `backend/.env` to shift the app clock
 (e.g. the minutes from now until 17:58), then restart the backend. Ignored when `ENVIRONMENT=production`.

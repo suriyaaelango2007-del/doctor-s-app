@@ -27,6 +27,7 @@ class ApptInfo:
     start_time: time
     doctor_name: str
     clinic_name: str
+    patient_phone: str = ""
 
 
 def fmt_date(d: date) -> str:
@@ -37,9 +38,25 @@ def fmt_time(t: time) -> str:
     return t.strftime("%I:%M %p").lstrip("0")
 
 
+def fmt_phone(e164: str) -> str:
+    """+919876543210 -> +91 98765 43210"""
+    if e164.startswith("+91") and len(e164) == 13:
+        return f"+91 {e164[3:8]} {e164[8:]}"
+    return e164
+
+
+def _details(a: ApptInfo) -> str:
+    """The short appointment block: name, date & time, phone (one paragraph, one line each)."""
+    return "\n".join([
+        f"Name: {a.patient_name}",
+        f"Date & time: {_when(a)}",
+        f"Phone: {fmt_phone(a.patient_phone)}",
+    ])
+
+
 def _build(type_: str, subject: str, paragraphs: list[str], link: tuple[str, str] | None = None) -> Email:
     text = "\n\n".join(paragraphs)
-    html_parts = [f"<p>{escape(p)}</p>" for p in paragraphs]
+    html_parts = [f"<p>{escape(p).replace(chr(10), '<br>')}</p>" for p in paragraphs]
     if link:
         label, url = link
         text += f"\n\n{label}: {url}"
@@ -100,11 +117,23 @@ def confirmed(a: ApptInfo) -> Email:
         "CONFIRMED",
         f"Appointment confirmed — {_when(a)}",
         [
-            f"Hello {a.patient_name},",
-            f"Your appointment with {a.doctor_name} at {a.clinic_name} is confirmed for {_when(a)}.",
-            "You'll get a call from our AI assistant shortly. It will ask a few questions about your "
-            "problem so the doctor is ready for your visit.",
+            f"Your appointment with {a.doctor_name} is confirmed.",
+            _details(a),
+            "You'll get a call from our AI assistant shortly on this number.",
         ],
+    )
+
+
+def intake_form(a: ApptInfo, link: str, expires: str) -> Email:
+    return _build(
+        "INTAKE_FORM",
+        f"Short form before your visit — {_when(a)}",
+        [
+            f"We couldn't reach you by phone. Please fill this short form before your visit with {a.doctor_name}.",
+            _details(a),
+            f"The link works once and expires at {expires}.",
+        ],
+        ("Open the form", link),
     )
 
 

@@ -8,7 +8,7 @@ from fastapi.responses import JSONResponse
 from app import db, time_rules
 from app.config import get_settings
 from app.jobs import scheduler
-from app.routers import doctor, public, webhooks
+from app.routers import doctor, forms, public, webhooks
 from app.services import calls, summary
 from app.services.booking import BookingError
 
@@ -56,6 +56,7 @@ async def booking_error_handler(_: Request, exc: BookingError):
 app.include_router(public.router)
 app.include_router(doctor.router)
 app.include_router(webhooks.router)
+app.include_router(forms.router)
 
 
 @app.get("/api/health")

@@ -121,8 +121,10 @@ def on_call_completed(call_id: UUID) -> None:
 
 
 def on_attempts_exhausted(call_id: UUID) -> None:
-    """Milestone 7: send the fallback intake form."""
-    log.info("Call %s out of attempts — form fallback arrives in milestone 7", call_id)
+    """No more call attempts: send the fallback intake form (spec §5)."""
+    from app.services import forms  # late import: forms -> booking -> email; keeps imports one-way
+
+    forms.send_form_for_call(call_id)
 
 
 # ---------------------------------------------------------------------------

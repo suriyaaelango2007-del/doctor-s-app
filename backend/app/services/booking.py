@@ -169,13 +169,14 @@ class BookingRequest:
     consent_ai_call: bool
 
 
-def _appt_info(conn: psycopg.Connection, appointment_id: UUID) -> tuple[ApptInfo, str]:
+def appointment_info(conn: psycopg.Connection, appointment_id: UUID) -> tuple[ApptInfo, str]:
     """Template data + patient email for an appointment."""
     row = conn.execute(
         """
-        select a.patient_name, a.patient_email,
+        select a.patient_name, a.patient_email, p.phone as patient_phone,
                s.date, s.start_time, d.name as doctor_name, d.clinic_name
         from appointments a
+        join patients p on p.id = a.patient_id
         join slots s on s.id = a.slot_id
         join doctors d on d.id = s.doctor_id
         where a.id = %s
@@ -190,6 +191,7 @@ def _appt_info(conn: psycopg.Connection, appointment_id: UUID) -> tuple[ApptInfo
         start_time=row["start_time"],
         doctor_name=row["doctor_name"],
         clinic_name=row["clinic_name"],
+        patient_phone=row["patient_phone"],
     )
     return info, row["patient_email"]
 
@@ -240,7 +242,7 @@ def create_appointment(req: BookingRequest, now: datetime | None = None) -> dict
                  req.consent_ai_call, now),
             ).fetchone()
 
-            info, patient_email = _appt_info(conn, appt["id"])
+            info, patient_email = appointment_info(conn, appt["id"])
             doctor = get_doctor(conn)
     except errors.UniqueViolation:
         # one_active_booking_per_slot — someone else got there first
@@ -298,7 +300,7 @@ def confirm(appointment_id: UUID, doctor_id: UUID, now: datetime | None = None) 
             "insert into calls (appointment_id, status) values (%s, 'QUEUED')",
             (appointment_id,),
         )
-        info, patient_email = _appt_info(conn, appointment_id)
+        info, patient_email = appointment_info(conn, appointment_id)
 
     email.send(patient_email, email_templates.confirmed(info), appointment_id)
     return {"id": appointment_id, "status": "CONFIRMED"}
@@ -320,7 +322,7 @@ def reject(
             """,
             (now, reason, appointment_id),
         )
-        info, patient_email = _appt_info(conn, appointment_id)
+        info, patient_email = appointment_info(conn, appointment_id)
 
     email.send(patient_email, email_templates.rejected(info, reason), appointment_id)
     return {"id": appointment_id, "status": "REJECTED"}
@@ -353,7 +355,7 @@ def auto_cancel_pending(now: datetime | None = None) -> int:
             """,
             (now, cutoff),
         ).fetchall()
-        infos = [(r["id"], *_appt_info(conn, r["id"])) for r in rows]
+        infos = [(r["id"], *appointment_info(conn, r["id"])) for r in rows]
 
     for appt_id, info, patient_email in infos:
         email.send(patient_email, email_templates.auto_cancelled(info), appt_id)

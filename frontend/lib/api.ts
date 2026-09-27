@@ -179,7 +179,34 @@ export const publicApi = {
   slots: () => request<SlotsResponse>("/api/slots"),
   book: (input: BookingInput) =>
     request<BookingResult>("/api/appointments", { method: "POST", body: JSON.stringify(input) }),
+  form: (token: string) => request<FormInfo>(`/api/forms/${encodeURIComponent(token)}`),
+  submitForm: (token: string, answers: FormAnswers) =>
+    request<null>(`/api/forms/${encodeURIComponent(token)}`, { method: "POST", body: JSON.stringify(answers) }),
 };
+
+/** Fallback intake form (milestone 7). */
+export interface FormInfo {
+  patient_name: string;
+  doctor_name: string;
+  clinic_name: string;
+  date: string;
+  start_time: string;
+  language: Language;
+  specialty_questions: string[];
+  expires_at: string;
+}
+
+export interface FormAnswers {
+  language: Language;
+  main_problem: string;
+  duration: string;
+  severity: "mild" | "moderate" | "severe";
+  current_medicines: string;
+  allergies: string;
+  past_treatments: string;
+  specialty_answers: Record<string, string>;
+  patient_questions: string;
+}
 
 export function doctorApi(token: string) {
   return {

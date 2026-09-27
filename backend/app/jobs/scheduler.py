@@ -13,7 +13,7 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
 from app import config
-from app.services import booking, calls, summary
+from app.services import booking, calls, forms, summary
 
 log = logging.getLogger("clinic.jobs")
 
@@ -63,7 +63,7 @@ def build_scheduler() -> BackgroundScheduler:
         id="summary_worker",
         max_instances=1,
     )
-    # Milestone 7: 20:00 form fallback for confirmed appointments without a completed call.
+    sched.add_job(_safe(forms.send_pending_forms), _cron(config.CALL_WINDOW_END), id="form_fallback")
     return sched
 
 
@@ -94,3 +94,4 @@ def run_startup_catchup() -> None:
     """Make state correct right after a (re)start: slots exist, overdue bookings cancelled."""
     _safe(booking.generate_tomorrows_slots)()
     _safe(booking.auto_cancel_pending)()
+    _safe(forms.send_pending_forms)()

@@ -19,7 +19,7 @@ patient to collect their problem before the visit. Full spec: [clinic-ai-v1-buil
 | 4 | Emails + scheduled jobs (18:30 reminder, 19:00 auto-cancel) | ✅ |
 | 5 | ElevenLabs + Twilio call (queue worker, webhook, retries, missed-webhook recovery) | ✅ code + tests; needs your ElevenLabs + Twilio setup |
 | 6 | Summary + compliance check (Claude) | ✅ code + tests; needs `LLM_API_KEY` |
-| 7 | Retry + form fallback | — |
+| 7 | Retry + form fallback (intake form in Tamil / English / Hindi) | ✅ |
 | 8 | Hardening (rate limits, retention, Tamil testing) | — |
 
 ## Setup
@@ -128,6 +128,19 @@ The model defaults to `claude-opus-5` (`LLM_MODEL` to change). Requests use Anth
 fallback, so a safety-classifier decline is retried on a fallback model automatically.
 Without a key, calls still complete and the summaries are generated once a key is added.
 
+## Fallback intake form — milestone 7
+
+If the AI can't reach the patient, they get a short **INTAKE_FORM** email (name, date & time, phone and a link):
+- right after the last call attempt fails (or at once for an unverified number in Twilio trial mode), and
+- at **20:00** for any confirmed appointment still without a completed call (also on startup, until clinic opening).
+
+The link (`/form/<token>`) is a random 32-byte token — only its SHA-256 is stored — works **once**, and expires at
+the clinic's opening time on the visit day. The page opens in the patient's booking language and can switch between
+Tamil, English and Hindi. Answers are stored exactly as written and become the appointment's summary
+("from intake form" on the dashboard); the call badge shows **Form sent** → **Form received**.
+
+The Tamil and Hindi wording lives in `frontend/lib/formText.ts` — have a native speaker review it before launch.
+
 ## Daily timeline (IST, day before the visit)
 All in `backend/app/config.py`; every check lives in `backend/app/time_rules.py`.
 
@@ -139,6 +152,7 @@ All in `backend/app/config.py`; every check lives in `backend/app/time_rules.py`
 | until 19:00 | Doctor confirms / rejects; confirm starts the AI call |
 | 19:00 | Remaining pending bookings → `AUTO_CANCELLED`, patient emailed (also catches up on startup) |
 | until 19:50 | Calls and retries may start; no call starts after 19:50 |
+| 20:00 | Intake form emailed for confirmed appointments without a completed call |
 
 **Testing the deadlines by hand:** set `TIME_OFFSET_MINUTES` in `backend/.env` to shift the app clock
 (e.g. the minutes from now until 17:58), then restart the backend. Ignored when `ENVIRONMENT=production`.

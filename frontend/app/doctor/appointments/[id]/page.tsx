@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
-import { ApiError, doctorApi, type AppointmentDetail } from "@/lib/api";
+import { ApiError, doctorApi, type AppointmentDetail, type IntakeSummary } from "@/lib/api";
 import { formatDate, formatDateTime, formatPhone, formatTime, LANGUAGES } from "@/lib/format";
 import { signOut, useDoctorSession } from "@/lib/useDoctorSession";
 import { CallBadge, StatusBadge } from "../../components";
@@ -98,9 +98,7 @@ export default function AppointmentPage() {
                     {appt.summary.compliance_notes && <p className="mt-1">{appt.summary.compliance_notes}</p>}
                   </div>
                 )}
-                <pre className="overflow-x-auto text-sm whitespace-pre-wrap">
-                  {JSON.stringify(appt.summary.summary, null, 2)}
-                </pre>
+                <SummaryView summary={appt.summary.summary} source={appt.summary.source} />
               </>
             ) : (
               <p className="text-sm text-muted">
@@ -141,6 +139,88 @@ export default function AppointmentPage() {
         </div>
       )}
     </main>
+  );
+}
+
+const SEVERITY_STYLE: Record<IntakeSummary["severity"], string> = {
+  mild: "bg-accent-soft text-accent",
+  moderate: "bg-warn-soft text-warn",
+  severe: "bg-danger-soft text-danger",
+  "not mentioned": "bg-paper text-muted",
+};
+
+function SummaryView({ summary: s, source }: { summary: IntakeSummary; source: "CALL" | "FORM" }) {
+  const failed = s.notes?.startsWith("Summary failed");
+  const answers = Object.entries(s.specialty_answers ?? {});
+  return (
+    <div className="space-y-4 text-sm">
+      {s.hospital_advice_given && (
+        <div className="rounded-lg bg-danger-soft p-3 font-semibold text-danger">
+          The patient described a possible emergency and was told to visit the nearest hospital.
+        </div>
+      )}
+      {failed && (
+        <div className="rounded-lg bg-warn-soft p-3 text-warn">
+          The automatic summary failed. Please read the transcript below.
+        </div>
+      )}
+      <div>
+        <p className="text-lg leading-snug font-semibold">{s.chief_complaint}</p>
+        <div className="mt-2 flex flex-wrap items-center gap-2 text-muted">
+          <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${SEVERITY_STYLE[s.severity] ?? ""}`}>
+            {s.severity === "not mentioned" ? "Severity not mentioned" : s.severity}
+          </span>
+          <span>· {s.duration === "not mentioned" ? "Duration not mentioned" : s.duration}</span>
+          <span>· from {source === "CALL" ? "AI call" : "intake form"}</span>
+        </div>
+      </div>
+
+      <dl className="grid gap-3 sm:grid-cols-2">
+        <Field label="Symptoms" items={s.symptoms} />
+        <Field label="Current medicines" items={s.current_medicines} />
+        <Field label="Allergies" items={s.allergies} highlight />
+        <Field label="Past treatments" items={s.past_treatments} />
+      </dl>
+
+      {answers.length > 0 && (
+        <div>
+          <p className="mb-1 font-medium">Specialty questions</p>
+          <dl className="space-y-1">
+            {answers.map(([q, a]) => (
+              <div key={q}>
+                <dt className="text-muted">{q}</dt>
+                <dd>{a}</dd>
+              </div>
+            ))}
+          </dl>
+        </div>
+      )}
+
+      {s.patient_questions?.length > 0 && (
+        <div className="rounded-lg border border-line p-3">
+          <p className="mb-1 font-medium">Patient wants to ask you</p>
+          <ul className="list-disc space-y-0.5 pl-5">
+            {s.patient_questions.map((q) => (
+              <li key={q}>{q}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {s.notes && !failed && <p className="text-muted">{s.notes}</p>}
+    </div>
+  );
+}
+
+function Field({ label, items, highlight }: { label: string; items: string[]; highlight?: boolean }) {
+  const has = items?.length > 0;
+  return (
+    <div>
+      <dt className="font-medium">{label}</dt>
+      <dd className={has && highlight ? "font-medium text-danger" : has ? "" : "text-muted"}>
+        {has ? items.join(", ") : "None mentioned"}
+      </dd>
+    </div>
   );
 }
 

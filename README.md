@@ -18,7 +18,7 @@ patient to collect their problem before the visit. Full spec: [clinic-ai-v1-buil
 | 3 | Doctor dashboard | ✅ |
 | 4 | Emails + scheduled jobs (18:30 reminder, 19:00 auto-cancel) | ✅ |
 | 5 | ElevenLabs call (queue worker, webhook, retries, missed-webhook recovery) | ✅ code + tests; needs your ElevenLabs keys |
-| 6 | Summary + compliance | — (prompts in `backend/app/prompts/`) |
+| 6 | Summary + compliance check (Claude) | ✅ code + tests; needs `LLM_API_KEY` |
 | 7 | Retry + form fallback | — |
 | 8 | Hardening (rate limits, retention, Tamil testing) | — |
 
@@ -91,6 +91,23 @@ and use the printed `https://….trycloudflare.com/api/webhooks/elevenlabs` as t
 
 Calls only start **the day before the visit, until 19:50 IST**, so during the day just book and confirm a slot
 for tomorrow. After 19:50 (or 18:00 for booking), shift the clock with `TIME_OFFSET_MINUTES` (see below).
+
+## Summaries (Claude) — milestone 6
+
+When a call completes, a background job sends the transcript to Claude twice:
+1. **Summary** → the JSON in `backend/app/prompts/summary_prompt.md` / spec §10 (chief complaint, duration,
+   severity, symptoms, medicines, allergies, specialty answers, the patient's questions, …), validated against a
+   Pydantic schema. Invalid output is retried once; after that the doctor sees "Summary failed — see transcript".
+2. **Compliance check** → did the AI assistant give any medical advice? Flagged calls get a red
+   **⚠ Check AI call** badge. If the check itself fails, the call is flagged so a human looks.
+
+The dashboard shows the chief complaint next to each confirmed appointment, a red **⚠ Emergency mentioned**
+badge when the patient was told to go to hospital, and the full summary on the appointment page.
+
+Setup: create a key at https://console.anthropic.com → *API keys* and put it in `LLM_API_KEY`.
+The model defaults to `claude-opus-5` (`LLM_MODEL` to change). Requests use Anthropic's server-side refusal
+fallback, so a safety-classifier decline is retried on a fallback model automatically.
+Without a key, calls still complete and the summaries are generated once a key is added.
 
 ## Daily timeline (IST, day before the visit)
 All in `backend/app/config.py`; every check lives in `backend/app/time_rules.py`.

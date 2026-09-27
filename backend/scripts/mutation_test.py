@@ -7,6 +7,8 @@ Survivors = behaviour the tests don't pin down.
 Usage (from backend/, with the test Postgres running):
   uv run python -m scripts.mutation_test                       # all targets
   uv run python -m scripts.mutation_test app/time_rules.py     # one file
+  uv run python -m scripts.mutation_test app/services/summary.py --tests tests/test_summary.py
+      # only run the given test files per mutant (much faster; may under-count kills)
 """
 
 import ast
@@ -103,10 +105,10 @@ def build_mutant(source: str, index: int) -> tuple[str, int, str]:
     return ast.unparse(tree), line, desc
 
 
-def run_tests() -> str:
+def run_tests(test_paths: list[str] | None = None) -> str:
     try:
         r = subprocess.run(
-            [sys.executable, "-m", "pytest", "-x", "-q", "-p", "no:cacheprovider", "--no-header"],
+            [sys.executable, "-m", "pytest", "-x", "-q", "-p", "no:cacheprovider", "--no-header", *(test_paths or [])],
             cwd=ROOT, capture_output=True, text=True, timeout=TEST_TIMEOUT,
         )
     except subprocess.TimeoutExpired:
@@ -121,10 +123,10 @@ def restore_backups() -> None:
         print(f"Restored {bak.with_suffix('').relative_to(ROOT)} from an interrupted run")
 
 
-def main(targets: list[str]) -> None:
+def main(targets: list[str], test_paths: list[str] | None = None) -> None:
     restore_backups()
     print("Baseline test run ...", flush=True)
-    if run_tests() != "survived":
+    if run_tests(test_paths) != "survived":
         sys.exit("Tests fail without mutations — fix them first (is the test Postgres running?).")
 
     results = []
@@ -141,7 +143,7 @@ def main(targets: list[str]) -> None:
                 mutated, line, desc = build_mutant(original, i)
                 path.write_text(mutated, encoding="utf-8")
                 t = time.time()
-                outcome = run_tests()
+                outcome = run_tests(test_paths)
                 mark = "." if outcome.startswith("killed") else "S"
                 print(f"  [{mark}] {rel}:{line}  {desc}  ({time.time() - t:.0f}s)", flush=True)
                 results.append({"file": rel, "line": line, "mutation": desc, "outcome": outcome})
@@ -160,4 +162,9 @@ def main(targets: list[str]) -> None:
 
 
 if __name__ == "__main__":
-    main(sys.argv[1:] or DEFAULT_TARGETS)
+    args = sys.argv[1:]
+    tests: list[str] = []
+    if "--tests" in args:
+        i = args.index("--tests")
+        args, tests = args[:i], args[i + 1:]
+    main(args or DEFAULT_TARGETS, tests or None)

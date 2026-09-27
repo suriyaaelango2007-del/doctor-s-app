@@ -75,6 +75,7 @@ export interface AppointmentRow {
   call_attempt: number | null;
   summary_preview: string | null;
   compliance_flag: boolean | null;
+  hospital_advice_given: boolean | null;
 }
 
 export interface CallRow {
@@ -109,11 +110,27 @@ export interface AppointmentDetail {
   calls: CallRow[];
   summary: {
     source: "CALL" | "FORM";
-    summary: Record<string, unknown>;
+    summary: IntakeSummary;
     compliance_flag: boolean;
     compliance_notes: string | null;
     created_at: string;
   } | null;
+}
+
+/** Summary JSON (spec §10). */
+export interface IntakeSummary {
+  chief_complaint: string;
+  duration: string;
+  severity: "mild" | "moderate" | "severe" | "not mentioned";
+  symptoms: string[];
+  current_medicines: string[];
+  allergies: string[];
+  past_treatments: string[];
+  specialty_answers: Record<string, string>;
+  patient_questions: string[];
+  hospital_advice_given: boolean;
+  language: Language;
+  notes: string;
 }
 
 export class ApiError extends Error {

@@ -391,7 +391,8 @@ select a.id, a.status, a.created_at, a.decided_at, a.reject_reason,
        p.name as patient_name, p.phone as patient_phone, p.preferred_language,
        c.status as call_status, c.attempt as call_attempt,
        sm.summary->>'chief_complaint' as summary_preview,
-       sm.compliance_flag
+       sm.compliance_flag,
+       (sm.summary->>'hospital_advice_given')::boolean as hospital_advice_given
 from appointments a
 join slots s on s.id = a.slot_id
 join patients p on p.id = a.patient_id

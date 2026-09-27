@@ -32,6 +32,7 @@ class AppointmentRow(BaseModel):
     call_attempt: int | None
     summary_preview: str | None
     compliance_flag: bool | None
+    hospital_advice_given: bool | None
 
 
 class Me(BaseModel):

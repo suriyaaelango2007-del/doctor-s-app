@@ -6,7 +6,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { ApiError, doctorApi, type AppointmentRow, type Me } from "@/lib/api";
 import { formatDate, formatPhone, formatTime, LANGUAGES } from "@/lib/format";
 import { signOut, useDoctorSession } from "@/lib/useDoctorSession";
-import { CallBadge, ComplianceBadge, StatusBadge } from "./components";
+import { AlertBadges, StatusBadge } from "./components";
 
 const POLL_MS = 30_000;
 
@@ -101,8 +101,8 @@ export default function DoctorDashboard() {
           <Empty>Nothing confirmed yet.</Empty>
         ) : (
           confirmed.map((a) => (
-            <Row key={a.id} appt={a}>
-              <CallBadge status={a.call_status} />
+            <Row key={a.id} appt={a} preview={a.summary_preview !== null}>
+              <AlertBadges appt={a} />
             </Row>
           ))
         )}
@@ -126,7 +126,7 @@ export default function DoctorDashboard() {
         ) : (
           data.today.map((a) => (
             <Row key={a.id} appt={a} preview>
-              {a.compliance_flag ? <ComplianceBadge /> : <CallBadge status={a.call_status} />}
+              <AlertBadges appt={a} />
             </Row>
           ))
         )}

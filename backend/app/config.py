@@ -23,6 +23,7 @@ SLOT_GENERATION = time(0, 5)
 CALL_WORKER_SECONDS = 30
 STUCK_CALL_CHECK_MINUTES = 5
 STUCK_CALL_AFTER_MINUTES = 15
+SUMMARY_WORKER_SECONDS = 30
 WEBHOOK_TOLERANCE_SECONDS = 30 * 60  # matches the ElevenLabs SDK
 
 # Specialty questions injected into the AI agent prompt and the fallback form.
@@ -52,8 +53,9 @@ class Settings(BaseSettings):
     elevenlabs_phone_number_id: str = ""
     elevenlabs_webhook_secret: str = ""
 
-    # Summary LLM (milestone 6)
+    # Summary LLM (milestone 6) — Anthropic API key
     llm_api_key: str = ""
+    llm_model: str = "claude-opus-5"
 
     # Email — empty EMAIL_API_KEY means "log to console"
     email_provider: str = "resend"

@@ -16,6 +16,8 @@ os.environ.update(
     SUPABASE_SERVICE_ROLE_KEY="",
     SUPABASE_JWT_SECRET="",
     EMAIL_API_KEY="",
+    LLM_API_KEY="",
+    LLM_MODEL="claude-opus-5",
     ENVIRONMENT="test",
     SCHEDULER_ENABLED="false",
     TIME_OFFSET_MINUTES="0",

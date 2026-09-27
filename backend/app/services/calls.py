@@ -88,8 +88,10 @@ def get_conversation(conversation_id: str) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 def on_call_completed(call_id: UUID) -> None:
-    """Milestone 6: generate the summary + compliance check from the transcript."""
-    log.info("Call %s completed — summary generation arrives in milestone 6", call_id)
+    """Summarise right away (in the background) instead of waiting for the next worker tick."""
+    from app.jobs.scheduler import kick  # late import: the scheduler imports this module
+
+    kick("summary_worker")
 
 
 def on_attempts_exhausted(call_id: UUID) -> None:

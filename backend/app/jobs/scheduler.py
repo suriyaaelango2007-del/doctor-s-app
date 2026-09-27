@@ -13,7 +13,7 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
 from app import config
-from app.services import booking, calls
+from app.services import booking, calls, summary
 
 log = logging.getLogger("clinic.jobs")
 
@@ -57,6 +57,12 @@ def build_scheduler() -> BackgroundScheduler:
         id="stuck_call_recovery",
         max_instances=1,
     )
+    sched.add_job(
+        _safe(summary.process_pending_summaries, quiet=True),
+        IntervalTrigger(seconds=config.SUMMARY_WORKER_SECONDS),
+        id="summary_worker",
+        max_instances=1,
+    )
     # Milestone 7: 20:00 form fallback for confirmed appointments without a completed call.
     return sched
 
@@ -74,10 +80,14 @@ def shutdown() -> None:
         _scheduler = None
 
 
-def kick_call_worker() -> None:
-    """Run the call worker now (e.g. right after a confirm) instead of waiting up to 30s."""
-    if _scheduler and (job := _scheduler.get_job("call_worker")):
+def kick(job_id: str) -> None:
+    """Run an interval job now instead of waiting for its next tick."""
+    if _scheduler and (job := _scheduler.get_job(job_id)):
         job.modify(next_run_time=datetime.now(config.IST))
+
+
+def kick_call_worker() -> None:
+    kick("call_worker")
 
 
 def run_startup_catchup() -> None:

@@ -19,7 +19,20 @@ def open_pool(conninfo: str | None = None) -> ConnectionPool:
             max_size=10,
             # prepare_threshold=None keeps us compatible with Supabase's
             # transaction-mode pooler (pgbouncer), which can't do prepared statements.
-            kwargs={"row_factory": dict_row, "prepare_threshold": None},
+            # TCP keepalives stop NATs/poolers from silently dropping idle connections.
+            kwargs={
+                "row_factory": dict_row,
+                "prepare_threshold": None,
+                "keepalives": 1,
+                "keepalives_idle": 30,
+                "keepalives_interval": 10,
+                "keepalives_count": 3,
+            },
+            # Supabase's pooler closes idle connections: test each one before use and
+            # retire idle/old ones ourselves, so a request never gets a dead connection.
+            check=ConnectionPool.check_connection,
+            max_idle=120,
+            max_lifetime=1800,
             open=True,
         )
     return _pool

@@ -224,11 +224,9 @@ def webhook(public_url: str) -> None:
     if not s.elevenlabs_agent_id:
         raise SetupError("Create the agent first (create-agent)")
     url = public_url.rstrip("/") + "/api/webhooks/elevenlabs"
-    # Replace only our own webhook (by name); leave every other workspace webhook alone.
-    for w in _workspace("GET").get("webhooks", []):
-        if w.get("name") == WEBHOOK_NAME:
-            _workspace("DELETE", f"/{w['webhook_id']}")
-            print(f"  removed old '{WEBHOOK_NAME}' ({w.get('webhook_url')})")
+    old = [w for w in _workspace("GET").get("webhooks", []) if w.get("name") == WEBHOOK_NAME]
+
+    # Create + attach the new webhook first: ElevenLabs refuses to delete one that's still in use.
     created = _workspace("POST", json={"settings": {"auth_type": "hmac", "name": WEBHOOK_NAME, "webhook_url": url}})
     webhook_id, secret = created["webhook_id"], created.get("webhook_secret")
     if not secret:
@@ -239,6 +237,14 @@ def webhook(public_url: str) -> None:
     }}}})
     print("  attached to the clinic agent only")
     set_env("ELEVENLABS_WEBHOOK_SECRET", secret)
+
+    # Now remove our previous webhook(s) (by name); every other workspace webhook is left alone.
+    for w in old:
+        try:
+            _workspace("DELETE", f"/{w['webhook_id']}")
+            print(f"  removed old '{WEBHOOK_NAME}' ({w.get('webhook_url')})")
+        except SetupError as exc:
+            print(f"  could not remove old webhook {w['webhook_id']}: {exc}")
     print("  restart the backend so it picks up the new secret")
 
 

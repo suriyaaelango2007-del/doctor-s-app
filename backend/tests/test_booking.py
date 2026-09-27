@@ -1,6 +1,7 @@
 import threading
 from uuid import uuid4
 
+import psycopg
 import pytest
 import time_machine
 from fastapi.testclient import TestClient
@@ -9,7 +10,7 @@ from app import db
 from app.auth import current_doctor
 from app.main import app
 from app.services import booking
-from tests.conftest import TODAY, TOMORROW, ist
+from tests.conftest import TEST_DB, TODAY, TOMORROW, ist
 
 NOON = ist(TODAY, 12)
 
@@ -486,3 +487,14 @@ def test_shared_phone_confirm_email_goes_to_that_booking(slots, doctor):
             "select recipient from notifications where type = 'CONFIRMED' and appointment_id = %s",
             (mohan["id"],)).fetchone()
     assert n["recipient"] == "mohan@test.in"
+
+
+def test_pool_replaces_connection_closed_by_server(doctor):
+    """Supabase's pooler drops idle connections; the pool must hand out a working one anyway."""
+    pool = db.open_pool()
+    with pool.connection() as conn:
+        pid = conn.execute("select pg_backend_pid() as pid").fetchone()["pid"]
+    with psycopg.connect(TEST_DB, autocommit=True) as admin:  # simulate the server closing it
+        admin.execute("select pg_terminate_backend(%s)", (pid,))
+    with db.transaction() as conn:
+        assert conn.execute("select 1 as ok").fetchone()["ok"] == 1

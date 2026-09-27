@@ -7,9 +7,13 @@ Run from backend/:
   uv run python -m scripts.setup_voice create-agent   # create the agent -> ELEVENLABS_AGENT_ID
   uv run python -m scripts.setup_voice import-number  # import Twilio number -> ELEVENLABS_PHONE_NUMBER_ID
   uv run python -m scripts.setup_voice all            # all three, in order
+  uv run python -m scripts.setup_voice webhook https://<public-backend-url>
+      # (re)create the clinic's post-call webhook -> ELEVENLABS_WEBHOOK_SECRET; restart the backend after
 
-create-agent / import-number write the new ids into backend/.env. The post-call
-webhook has no API, so it is still set up by hand (see README).
+
+create-agent / import-number / webhook write the new values into backend/.env.
+The webhook is attached to the clinic agent only (per-agent override), so any
+workspace-wide post-call webhook used by other agents keeps working.
 """
 
 import argparse
@@ -26,6 +30,9 @@ from app.db import open_pool
 ENV_FILE = Path(__file__).resolve().parents[1] / ".env"
 PROMPTS = Path(__file__).resolve().parents[1] / "app" / "prompts"
 EL_API = "https://api.elevenlabs.io/v1/convai"
+WEBHOOKS_API = "https://api.elevenlabs.io/v1/workspace/webhooks"
+WEBHOOK_NAME = "Clinic AI post-call"
+WEBHOOK_EVENTS = ["transcript", "call_initiation_failure"]
 TWILIO_API = "https://api.twilio.com/2010-04-01/Accounts"
 
 FIRST_MESSAGE = (
@@ -33,6 +40,7 @@ FIRST_MESSAGE = (
     "with {{doctor_name}} at {{appointment_time}}."
 )
 MAX_CALL_SECONDS = 360  # prompt asks for < 5 minutes; hard stop at 6
+AGENT_LLM = "gemini-3.6-flash"  # chosen by the clinic: fast + cheap, decent instruction-following
 
 # Sample values so the dashboard's "Test AI agent" works; real calls send their own (calls.dynamic_variables).
 PLACEHOLDERS = {
@@ -153,6 +161,7 @@ def agent_config() -> dict[str, Any]:
                 "dynamic_variables": {"dynamic_variable_placeholders": PLACEHOLDERS},
                 "prompt": {
                     "prompt": system_prompt,
+                    "llm": AGENT_LLM,
                     "built_in_tools": {
                         "end_call": tool("end_call"),
                         "language_detection": tool("language_detection"),
@@ -202,11 +211,50 @@ def import_number() -> str:
     return phone_number_id
 
 
+def _workspace(method: str, path: str = "", **kwargs) -> Any:
+    r = httpx.request(method, f"{WEBHOOKS_API}{path}",
+                      headers={"xi-api-key": get_settings().elevenlabs_api_key}, timeout=30, **kwargs)
+    if r.status_code >= 400:
+        raise SetupError(f"ElevenLabs {method} webhooks{path} -> HTTP {r.status_code}: {r.text[:800]}")
+    return r.json() if r.content else {}
+
+
+def webhook(public_url: str) -> None:
+    s = get_settings()
+    if not s.elevenlabs_agent_id:
+        raise SetupError("Create the agent first (create-agent)")
+    url = public_url.rstrip("/") + "/api/webhooks/elevenlabs"
+    # Replace only our own webhook (by name); leave every other workspace webhook alone.
+    for w in _workspace("GET").get("webhooks", []):
+        if w.get("name") == WEBHOOK_NAME:
+            _workspace("DELETE", f"/{w['webhook_id']}")
+            print(f"  removed old '{WEBHOOK_NAME}' ({w.get('webhook_url')})")
+    created = _workspace("POST", json={"settings": {"auth_type": "hmac", "name": WEBHOOK_NAME, "webhook_url": url}})
+    webhook_id, secret = created["webhook_id"], created.get("webhook_secret")
+    if not secret:
+        raise SetupError("ElevenLabs did not return a webhook secret")
+    print(f"  created webhook {webhook_id} -> {url}")
+    el("PATCH", f"/agents/{s.elevenlabs_agent_id}", json={"platform_settings": {"workspace_overrides": {"webhooks": {
+        "post_call_webhook_id": webhook_id, "events": WEBHOOK_EVENTS, "transcript_format": "json", "send_audio": False,
+    }}}})
+    print("  attached to the clinic agent only")
+    set_env("ELEVENLABS_WEBHOOK_SECRET", secret)
+    print("  restart the backend so it picks up the new secret")
+
+
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("step", choices=["check", "create-agent", "import-number", "all"])
-    step = p.parse_args().step
+    p.add_argument("step", choices=["check", "create-agent", "import-number", "all", "webhook"])
+    p.add_argument("url", nargs="?", help="public backend URL (webhook step only)")
+    args = p.parse_args()
+    step = args.step
     try:
+        if step == "webhook":
+            if not args.url:
+                raise SetupError("usage: setup_voice webhook https://<public-backend-url>")
+            print("Setting up post-call webhook")
+            webhook(args.url)
+            return
         if step in ("create-agent", "all"):
             print("Creating agent")
             create_agent()

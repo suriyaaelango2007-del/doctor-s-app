@@ -31,6 +31,8 @@ log = logging.getLogger("clinic.summary")
 
 PROMPTS = Path(__file__).resolve().parents[1] / "prompts"
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
+# Server-side refusal fallback exists only for these models; other models (e.g. Haiku) get a plain request.
+FALLBACK_MODELS = {"claude-opus-5", "claude-opus-5-5", "claude-fable-5", "claude-fable-5-1"}
 SUMMARY_FAILED_NOTE = "Summary failed — see transcript"
 
 T = TypeVar("T", bound=BaseModel)
@@ -101,16 +103,19 @@ def _prompt(name: str) -> str:
 
 def llm_parse(schema: type[T], system: str, content: str) -> T:
     """One structured-output request. Returns the validated model or raises LLMError / LLMUnavailable."""
+    model = get_settings().llm_model
+    extra: dict[str, Any] = {}
+    if model in FALLBACK_MODELS:
+        # If a safety classifier declines, re-run on Anthropic's recommended fallback model.
+        extra = {"betas": [FALLBACK_BETA], "fallbacks": "default"}
     try:
         response = _client().beta.messages.parse(
-            model=get_settings().llm_model,
+            model=model,
             max_tokens=16000,
             system=system,
             messages=[{"role": "user", "content": content}],
             output_format=schema,
-            # If a safety classifier declines, re-run on Anthropic's recommended fallback model.
-            betas=[FALLBACK_BETA],
-            fallbacks="default",
+            **extra,
         )
     except (anthropic.AuthenticationError, anthropic.PermissionDeniedError, anthropic.NotFoundError) as exc:
         raise LLMUnavailable(f"Claude API configuration problem: {exc}") from exc

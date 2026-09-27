@@ -258,8 +258,8 @@ def test_audio_webhook_ignored(el):
 def test_recovery_applies_finished_conversation(el, confirmed):
     calls.process_call_queue(now=ist(TODAY, 18, 0))
     el.conversations["conv_1"] = transcription("conv_1")["data"]
-    assert calls.recover_stuck_calls(now=ist(TODAY, 18, 14)) == 0  # not stuck yet
-    assert calls.recover_stuck_calls(now=ist(TODAY, 18, 16)) == 1
+    assert calls.recover_stuck_calls(now=ist(TODAY, 18, 2)) == 0  # too early to check
+    assert calls.recover_stuck_calls(now=ist(TODAY, 18, 4)) == 1
     assert call_row(confirmed["id"])["status"] == "COMPLETED"
 
 
@@ -604,3 +604,111 @@ def test_verified_numbers_parsing(monkeypatch):
     s = get_settings()
     monkeypatch.setattr(s, "verified_test_numbers", " +919812345678 ,+91 98765 00000,, ")
     assert s.verified_numbers == {"+919812345678", "+919876500000"}
+
+
+# ---------------------------------------------------------------------------
+# Calls where the agent never connected (ElevenLabs stuck at "initiated", no webhook)
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def never_connected(el, confirmed, monkeypatch):
+    calls.process_call_queue(now=ist(TODAY, 18, 0))
+    el.conversations["conv_1"] = {"conversation_id": "conv_1", "status": "initiated", "transcript": []}
+    seen = {}
+
+    def twilio_status(status):
+        def lookup(sid):
+            seen["sid"] = sid
+            return status
+        monkeypatch.setattr(calls, "get_twilio_call_status", lookup)
+
+    return twilio_status, seen
+
+
+@pytest.mark.parametrize("twilio", ["completed", "busy", "no-answer", "canceled"])
+def test_never_connected_call_becomes_no_answer_and_retries(never_connected, confirmed, el, twilio):
+    set_status, seen = never_connected
+    set_status(twilio)
+    assert calls.recover_stuck_calls(now=ist(TODAY, 18, 4)) == 1
+    c = call_row(confirmed["id"])
+    assert c["status"] == "NO_ANSWER"
+    assert f"Twilio: {twilio}" in c["failure_reason"] and "press a key" in c["failure_reason"]
+    assert c["next_retry_at"] == ist(TODAY, 18, 19)
+    assert seen["sid"] == "CA1"
+    assert el.exhausted == []
+    assert calls.process_call_queue(now=ist(TODAY, 18, 19)) == 1  # retried
+    assert call_row(confirmed["id"])["attempt"] == 2
+
+
+def test_never_connected_twilio_failed(never_connected, confirmed):
+    set_status, _ = never_connected
+    set_status("failed")
+    calls.recover_stuck_calls(now=ist(TODAY, 18, 4))
+    c = call_row(confirmed["id"])
+    assert (c["status"], c["failure_reason"]) == ("FAILED", "Twilio could not place the call")
+
+
+@pytest.mark.parametrize("twilio", ["queued", "ringing", "in-progress"])
+def test_never_connected_but_twilio_still_active(never_connected, confirmed, twilio):
+    set_status, _ = never_connected
+    set_status(twilio)
+    assert calls.recover_stuck_calls(now=ist(TODAY, 18, 10)) == 0
+    assert call_row(confirmed["id"])["status"] == "CALLING"
+
+
+def test_never_connected_without_twilio_waits_for_long_timeout(never_connected, confirmed):
+    set_status, _ = never_connected
+    set_status(None)
+    assert calls.recover_stuck_calls(now=ist(TODAY, 18, 10)) == 0
+    assert call_row(confirmed["id"])["status"] == "CALLING"
+    assert calls.recover_stuck_calls(now=ist(TODAY, 18, 16)) == 1
+    c = call_row(confirmed["id"])
+    assert c["status"] == "NO_ANSWER" and "Twilio: unknown" in c["failure_reason"]
+
+
+def test_never_connected_late_hands_off_to_form(el, confirmed, monkeypatch):
+    calls.process_call_queue(now=ist(TODAY, 19, 44))
+    el.conversations["conv_1"] = {"conversation_id": "conv_1", "status": "initiated"}
+    monkeypatch.setattr(calls, "get_twilio_call_status", lambda sid: "completed")
+    calls.recover_stuck_calls(now=ist(TODAY, 19, 48))
+    c = call_row(confirmed["id"])
+    assert (c["status"], c["next_retry_at"]) == ("NO_ANSWER", None)
+    assert el.exhausted == [c["id"]]
+
+
+def test_never_connected_check_waits_three_minutes(never_connected, confirmed):
+    set_status, _ = never_connected
+    set_status("completed")
+    assert calls.recover_stuck_calls(now=ist(TODAY, 18, 2)) == 0
+    assert call_row(confirmed["id"])["status"] == "CALLING"
+
+
+@pytest.fixture
+def twilio_creds(monkeypatch):
+    s = get_settings()
+    monkeypatch.setattr(s, "twilio_account_sid", "AC123")
+    monkeypatch.setattr(s, "twilio_auth_token", "tok")
+    return s
+
+
+def test_get_twilio_call_status_request(twilio_creds, monkeypatch):
+    seen = {}
+
+    def fake_get(url, auth, timeout):
+        seen.update(url=url, auth=auth)
+        return FakeResponse(200, {"sid": "CA9", "status": "no-answer"})
+
+    monkeypatch.setattr(calls.httpx, "get", fake_get)
+    assert calls.get_twilio_call_status("CA9") == "no-answer"
+    assert seen == {"url": "https://api.twilio.com/2010-04-01/Accounts/AC123/Calls/CA9.json", "auth": ("AC123", "tok")}
+
+
+def test_get_twilio_call_status_errors_return_none(twilio_creds, monkeypatch):
+    monkeypatch.setattr(calls.httpx, "get", lambda *a, **k: FakeResponse(404, {"message": "not found"}))
+    assert calls.get_twilio_call_status("CA9") is None
+    assert calls.get_twilio_call_status(None) is None
+
+
+def test_get_twilio_call_status_without_creds(monkeypatch):
+    monkeypatch.setattr(get_settings(), "twilio_account_sid", "")
+    assert calls.get_twilio_call_status("CA9") is None

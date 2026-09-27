@@ -277,10 +277,11 @@ def test_llm_parse_request_shape(monkeypatch):
 
 
 def test_llm_parse_uses_configured_model(monkeypatch):
-    monkeypatch.setattr(get_settings(), "llm_model", "claude-sonnet-5")
+    monkeypatch.setattr(get_settings(), "llm_model", "claude-fable-5-1")
     msgs = fake_client(monkeypatch, response(parsed=ComplianceResult(flag=False, notes="")))
     summary.llm_parse(ComplianceResult, "s", "c")
-    assert msgs.kwargs["model"] == "claude-sonnet-5"
+    assert msgs.kwargs["model"] == "claude-fable-5-1"
+    assert msgs.kwargs["fallbacks"] == "default"
 
 
 @pytest.mark.parametrize(
@@ -334,3 +335,12 @@ def test_llm_parse_schema_mismatch_is_llm_error(monkeypatch):
 def test_prompts_exist():
     assert "ONLY valid JSON" in summary._prompt("summary_prompt.md")
     assert "flag" in summary._prompt("compliance_prompt.md")
+
+
+def test_llm_parse_haiku_has_no_fallback(monkeypatch):
+    monkeypatch.setattr(get_settings(), "llm_model", "claude-haiku-4-5")
+    msgs = fake_client(monkeypatch, response(parsed=ComplianceResult(flag=False, notes="")))
+    summary.llm_parse(ComplianceResult, "s", "c")
+    assert msgs.kwargs["model"] == "claude-haiku-4-5"
+    assert "betas" not in msgs.kwargs and "fallbacks" not in msgs.kwargs
+    assert msgs.kwargs["output_format"] is ComplianceResult

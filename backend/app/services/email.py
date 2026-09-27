@@ -18,6 +18,10 @@ log = logging.getLogger("clinic.email")
 RESEND_URL = "https://api.resend.com/emails"
 
 
+class EmailError(Exception):
+    pass
+
+
 def _deliver(to: str, email: Email) -> str | None:
     """Send the email; return the provider message id. Raises on failure."""
     settings = get_settings()
@@ -43,7 +47,8 @@ def _deliver(to: str, email: Email) -> str | None:
         },
         timeout=15,
     )
-    resp.raise_for_status()
+    if resp.status_code >= 400:
+        raise EmailError(f"Resend HTTP {resp.status_code}: {resp.text[:300]}")
     return resp.json().get("id")
 
 
@@ -52,6 +57,9 @@ def send(to: str, email: Email, appointment_id: UUID | str | None = None) -> boo
     status, message_id, error = "SENT", None, None
     try:
         message_id = _deliver(to, email)
+    except EmailError as exc:
+        status, error = "FAILED", str(exc)[:500]
+        log.warning("Email %s to %s failed: %s", email.type, to, exc)
     except Exception as exc:  # noqa: BLE001
         status, error = "FAILED", str(exc)[:500]
         log.exception("Email %s to %s failed", email.type, to)

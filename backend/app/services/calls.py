@@ -26,6 +26,10 @@ from app.services.email_templates import fmt_time
 log = logging.getLogger("clinic.calls")
 
 API_BASE = "https://api.elevenlabs.io/v1/convai"
+TWILIO_API = "https://api.twilio.com/2010-04-01/Accounts"
+
+# Twilio call statuses after which the phone call is over.
+TWILIO_ENDED_NO_ANSWER = ("completed", "busy", "no-answer", "canceled")
 
 # Statuses after which nothing more happens to the call row from ElevenLabs' side.
 FINAL_STATUSES = ("COMPLETED", "FORM_SENT", "FORM_SUBMITTED")
@@ -72,6 +76,27 @@ def start_outbound_call(to_number: str, dynamic_variables: dict[str, Any]) -> di
     if not body.get("success"):
         raise ElevenLabsError(body.get("message") or "outbound call was not accepted")
     return {"conversation_id": body.get("conversation_id"), "twilio_call_sid": body.get("callSid")}
+
+
+def get_twilio_call_status(call_sid: str | None) -> str | None:
+    """Twilio's view of a call (queued/ringing/in-progress/completed/busy/no-answer/failed/canceled).
+
+    None if Twilio credentials are missing or the lookup fails.
+    """
+    s = get_settings()
+    if not (call_sid and s.twilio_account_sid and s.twilio_auth_token):
+        return None
+    try:
+        resp = httpx.get(
+            f"{TWILIO_API}/{s.twilio_account_sid}/Calls/{call_sid}.json",
+            auth=(s.twilio_account_sid, s.twilio_auth_token),
+            timeout=30,
+        )
+        resp.raise_for_status()
+    except httpx.HTTPError as exc:
+        log.warning("Twilio status lookup for %s failed: %s", call_sid, exc)
+        return None
+    return resp.json().get("status")
 
 
 def get_conversation(conversation_id: str) -> dict[str, Any]:
@@ -344,25 +369,53 @@ def handle_webhook(event: dict[str, Any], now: datetime | None = None) -> str:
 # Safety net for missed webhooks
 # ---------------------------------------------------------------------------
 
-def _fail_and_maybe_exhaust(call_id: UUID, reason: str, now: datetime) -> None:
+def _fail_and_maybe_exhaust(call_id: UUID, reason: str, now: datetime, status: str = "FAILED") -> None:
     with transaction() as conn:
         call = _lock_call(conn, "c.id", call_id)
         if call is None or call["status"] != "CALLING":
             return  # a webhook got there first
-        exhausted = _record_failure(conn, call_id, "FAILED", reason, now)
+        exhausted = _record_failure(conn, call_id, status, reason, now)
     if exhausted:
         on_attempts_exhausted(call_id)
 
 
+NEVER_CONNECTED_REASON = (
+    "Call ended before the assistant connected (Twilio: {status}). "
+    "On a trial account the listener must press a key after the trial message."
+)
+
+
+def _handle_never_connected(call: dict[str, Any], now: datetime) -> bool:
+    """ElevenLabs still says 'initiated': the agent never joined, and no webhook will come.
+
+    Ask Twilio whether the phone call is over. Returns True if the row was resolved.
+    """
+    twilio_status = get_twilio_call_status(call["twilio_call_sid"])
+    if twilio_status in TWILIO_ENDED_NO_ANSWER:
+        _fail_and_maybe_exhaust(call["id"], NEVER_CONNECTED_REASON.format(status=twilio_status), now, "NO_ANSWER")
+        return True
+    if twilio_status == "failed":
+        _fail_and_maybe_exhaust(call["id"], "Twilio could not place the call", now)
+        return True
+    if twilio_status is None and call["started_at"] < now - timedelta(minutes=config.STUCK_CALL_AFTER_MINUTES):
+        # No Twilio view (no credentials / lookup failed): give up waiting after the long timeout.
+        _fail_and_maybe_exhaust(call["id"], NEVER_CONNECTED_REASON.format(status="unknown"), now, "NO_ANSWER")
+        return True
+    return False  # still queued/ringing/in-progress on Twilio's side
+
+
 def recover_stuck_calls(now: datetime | None = None) -> int:
-    """CALLING rows older than STUCK_CALL_AFTER_MINUTES: ask ElevenLabs what happened."""
+    """CALLING rows with no result yet: ask ElevenLabs (and Twilio) what happened."""
     now = now or time_rules.now_ist()
     if not is_configured():
         return 0
-    cutoff = now - timedelta(minutes=config.STUCK_CALL_AFTER_MINUTES)
+    cutoff = now - timedelta(minutes=config.NEVER_CONNECTED_AFTER_MINUTES)
     with transaction() as conn:
         stuck = conn.execute(
-            "select id, elevenlabs_conversation_id from calls where status = 'CALLING' and started_at < %s",
+            """
+            select id, elevenlabs_conversation_id, twilio_call_sid, started_at
+            from calls where status = 'CALLING' and started_at < %s
+            """,
             (cutoff,),
         ).fetchall()
 
@@ -378,7 +431,9 @@ def recover_stuck_calls(now: datetime | None = None) -> int:
         except ElevenLabsError as exc:
             log.warning("Recovery: %s", exc)
             continue
-        if conv.get("status") == "done":
+        if conv.get("status") == "initiated":
+            handled += _handle_never_connected(c, now)
+        elif conv.get("status") == "done":
             handle_conversation_result(conv, now)
             handled += 1
         elif conv.get("status") == "failed":
@@ -387,5 +442,5 @@ def recover_stuck_calls(now: datetime | None = None) -> int:
             else:
                 _fail_and_maybe_exhaust(c["id"], "conversation failed", now)
             handled += 1
-        # initiated / in-progress / processing: leave it for the webhook or the next check
+        # in-progress / processing: leave it for the webhook or the next check
     return handled

@@ -49,17 +49,18 @@ def _headers() -> dict[str, str]:
 
 
 def start_outbound_call(to_number: str, dynamic_variables: dict[str, Any]) -> dict[str, Any]:
-    """POST /sip-trunk/outbound-call. Returns {conversation_id, sip_call_id}."""
+    """POST /twilio/outbound-call. Returns {conversation_id, twilio_call_sid}."""
     s = get_settings()
     try:
         resp = httpx.post(
-            f"{API_BASE}/sip-trunk/outbound-call",
+            f"{API_BASE}/twilio/outbound-call",
             headers=_headers(),
             json={
                 "agent_id": s.elevenlabs_agent_id,
                 "agent_phone_number_id": s.elevenlabs_phone_number_id,
                 "to_number": to_number,
                 "conversation_initiation_client_data": {"dynamic_variables": dynamic_variables},
+                "telephony_call_config": {"ringing_timeout_secs": config.RINGING_TIMEOUT_SECS},
             },
             timeout=30,
         )
@@ -70,7 +71,7 @@ def start_outbound_call(to_number: str, dynamic_variables: dict[str, Any]) -> di
     body = resp.json()
     if not body.get("success"):
         raise ElevenLabsError(body.get("message") or "outbound call was not accepted")
-    return {"conversation_id": body.get("conversation_id"), "sip_call_id": body.get("sip_call_id")}
+    return {"conversation_id": body.get("conversation_id"), "twilio_call_sid": body.get("callSid")}
 
 
 def get_conversation(conversation_id: str) -> dict[str, Any]:
@@ -102,6 +103,12 @@ def on_attempts_exhausted(call_id: UUID) -> None:
 # ---------------------------------------------------------------------------
 # Queue worker
 # ---------------------------------------------------------------------------
+
+def can_call_number(phone: str) -> bool:
+    """On a Twilio trial account only verified test numbers can be called."""
+    s = get_settings()
+    return not s.twilio_trial_mode or phone in s.verified_numbers
+
 
 def dynamic_variables(row: dict[str, Any]) -> dict[str, Any]:
     questions = config.SPECIALTY_QUESTIONS.get(row["specialty"].lower(), [])
@@ -152,8 +159,22 @@ def process_call_queue(now: datetime | None = None) -> int:
         capacity = get_settings().max_concurrent_calls - in_flight
         if capacity <= 0:
             return 0
-        rows = conn.execute(_CLAIM_SQL, {"tomorrow": tomorrow, "now": now, "limit": capacity}).fetchall()
-        for r in rows:
+        claimed = conn.execute(_CLAIM_SQL, {"tomorrow": tomorrow, "now": now, "limit": capacity}).fetchall()
+        rows, not_callable = [], []
+        for r in claimed:
+            if not can_call_number(r["phone"]):
+                # Twilio trial accounts can't call unverified numbers: go straight to the form.
+                conn.execute(
+                    """
+                    update calls set status = 'FAILED', failure_reason = %s, next_retry_at = null, ended_at = %s
+                    where id = %s
+                    """,
+                    ("Twilio trial: number is not a verified test number — sent the intake form instead",
+                     now, r["call_id"]),
+                )
+                not_callable.append(r["call_id"])
+                continue
+            rows.append(r)
             conn.execute(
                 """
                 update calls
@@ -165,6 +186,9 @@ def process_call_queue(now: datetime | None = None) -> int:
                 (now, r["call_id"]),
             )
 
+    for call_id in not_callable:
+        on_attempts_exhausted(call_id)
+
     started = 0
     for r in rows:
         try:
@@ -172,14 +196,14 @@ def process_call_queue(now: datetime | None = None) -> int:
         except ElevenLabsError as exc:
             log.warning("Starting call %s failed: %s", r["call_id"], exc)
             with transaction() as conn:
-                exhausted = _record_failure(conn, r["call_id"], "FAILED", f"start failed: {exc}"[:500], now)
+                exhausted = _record_failure(conn, r["call_id"], "FAILED", str(exc)[:500], now)
             if exhausted:
                 on_attempts_exhausted(r["call_id"])
             continue
         with transaction() as conn:
             conn.execute(
-                "update calls set elevenlabs_conversation_id = %s, sip_call_id = %s where id = %s",
-                (result["conversation_id"], result["sip_call_id"], r["call_id"]),
+                "update calls set elevenlabs_conversation_id = %s, twilio_call_sid = %s where id = %s",
+                (result["conversation_id"], result["twilio_call_sid"], r["call_id"]),
             )
         started += 1
         log.info("Call %s started (attempt %d, conversation %s)", r["call_id"], r["attempt"] + 1,

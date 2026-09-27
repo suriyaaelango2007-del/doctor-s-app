@@ -17,7 +17,7 @@ patient to collect their problem before the visit. Full spec: [clinic-ai-v1-buil
 | 2 | Booking flow | ✅ |
 | 3 | Doctor dashboard | ✅ |
 | 4 | Emails + scheduled jobs (18:30 reminder, 19:00 auto-cancel) | ✅ |
-| 5 | ElevenLabs call (queue worker, webhook, retries, missed-webhook recovery) | ✅ code + tests; needs your ElevenLabs keys |
+| 5 | ElevenLabs + Twilio call (queue worker, webhook, retries, missed-webhook recovery) | ✅ code + tests; needs your ElevenLabs + Twilio setup |
 | 6 | Summary + compliance check (Claude) | ✅ code + tests; needs `LLM_API_KEY` |
 | 7 | Retry + form fallback | — |
 | 8 | Hardening (rate limits, retention, Tamil testing) | — |
@@ -55,10 +55,10 @@ npm run dev
 - Patient booking: http://localhost:3000/book
 - Doctor dashboard: http://localhost:3000/doctor
 
-## AI calls (ElevenLabs) — milestone 5
+## AI calls (ElevenLabs + Twilio) — milestone 5
 
 How it works: **Confirm** → a `calls` row is queued → the call worker (every 30 s, and immediately on confirm)
-starts the call through ElevenLabs → ElevenLabs posts the result to `/api/webhooks/elevenlabs` →
+starts the call through ElevenLabs, which dials out via Twilio → ElevenLabs posts the result to `/api/webhooks/elevenlabs` →
 the call becomes **Call done** (patient spoke, transcript saved) or **No answer** (retried after 15 min if it can
 still start by 19:50; otherwise handed to the form fallback in milestone 7). A job every 5 minutes asks ElevenLabs
 about calls stuck in *Calling* for 15+ minutes, in case a webhook was missed.
@@ -66,8 +66,9 @@ about calls stuck in *Calling* for 15+ minutes, in case a webhook was missed.
 Without ElevenLabs keys the app works as before and confirmed calls simply stay **Call queued**.
 
 ### One-time setup
-1. **Phone number.** Get an Exotel or Plivo number with a SIP trunk, then in ElevenLabs → *Phone Numbers* →
-   *Import from SIP trunk*. Copy the phone number id → `ELEVENLABS_PHONE_NUMBER_ID`.
+1. **Phone number (Twilio).** Sign up at twilio.com (the free trial number is fine for the prototype).
+   In ElevenLabs → *Phone Numbers* → *Import from Twilio*, enter the number, Twilio Account SID and Auth Token —
+   ElevenLabs configures Twilio automatically. Copy the phone number id → `ELEVENLABS_PHONE_NUMBER_ID`.
 2. **Agent.** ElevenLabs → *Agents* → *New agent*.
    - System prompt: paste `backend/app/prompts/agent_system_prompt.md`.
    - First message: `Hello, this is the AI assistant from {{clinic_name}}, calling about your appointment with {{doctor_name}} at {{appointment_time}}.`
@@ -80,6 +81,19 @@ Without ElevenLabs keys the app works as before and confirmed calls simply stay 
    `https://<your-backend>/api/webhooks/elevenlabs`, enable **post-call transcription** and
    **call initiation failure**, and copy the secret → `ELEVENLABS_WEBHOOK_SECRET`.
 5. Set `MAX_CONCURRENT_CALLS` to your plan's concurrency limit.
+
+### Prototype on a Twilio trial account
+- Add every tester's phone in Twilio Console → *Phone Numbers → Verified Caller IDs*, and list the same numbers
+  (E.164, comma-separated) in `VERIFIED_TEST_NUMBERS`, with `TWILIO_TRIAL_MODE=true`.
+- With trial mode on, a confirmed booking whose number isn't in that list is **not called**; it goes straight
+  to the fallback form (milestone 7) and the appointment page says why.
+- Enable India in Twilio Console → *Voice → Geo Permissions*, or calls to +91 numbers fail.
+- Trial calls play a short Twilio message first and the person must press a key before the agent starts;
+  the caller ID is the Twilio (usually US) number. Trial credit is limited — keep test calls short.
+
+**Going live:** switch to an Indian provider (Exotel or Plivo SIP trunk) for an Indian caller ID. Only the
+phone-number import, the outbound-call endpoint (`/v1/convai/sip-trunk/outbound-call`) and the call-ID column
+change; set `TWILIO_TRIAL_MODE=false`.
 
 ### Testing webhooks on your laptop
 ElevenLabs needs a public HTTPS URL. Run a tunnel next to the backend:

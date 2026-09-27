@@ -23,6 +23,7 @@ SLOT_GENERATION = time(0, 5)
 CALL_WORKER_SECONDS = 30
 STUCK_CALL_CHECK_MINUTES = 5
 STUCK_CALL_AFTER_MINUTES = 15
+RINGING_TIMEOUT_SECS = 30
 SUMMARY_WORKER_SECONDS = 30
 WEBHOOK_TOLERANCE_SECONDS = 30 * 60  # matches the ElevenLabs SDK
 
@@ -52,6 +53,16 @@ class Settings(BaseSettings):
     elevenlabs_agent_id: str = ""
     elevenlabs_phone_number_id: str = ""
     elevenlabs_webhook_secret: str = ""
+
+    # Twilio (telephony behind ElevenLabs). Trial accounts can only call verified numbers.
+    twilio_account_sid: str = ""  # only needed if the backend looks up call status in Twilio
+    twilio_auth_token: str = ""
+    twilio_trial_mode: bool = False
+    verified_test_numbers: str = ""  # comma-separated E.164, e.g. +919876543210,+919812345678
+
+    @property
+    def verified_numbers(self) -> set[str]:
+        return {n.replace(" ", "") for n in self.verified_test_numbers.split(",") if n.strip()}
 
     # Summary LLM (milestone 6) — Anthropic API key
     llm_api_key: str = ""

@@ -37,7 +37,7 @@ class FakeElevenLabs:
             raise calls.ElevenLabsError("HTTP 500: boom")
         conv = f"conv_{len(self.started) + 1}"
         self.started.append({"to": to_number, "vars": dynamic_variables, "conversation_id": conv})
-        return {"conversation_id": conv, "sip_call_id": f"sip_{len(self.started)}"}
+        return {"conversation_id": conv, "twilio_call_sid": f"CA{len(self.started)}"}
 
     def get_conversation(self, conversation_id):
         return self.conversations[conversation_id]
@@ -97,8 +97,8 @@ def transcription(conversation_id, user_says="I have a rash on my arm", duration
 def test_worker_starts_queued_call(el, confirmed):
     assert calls.process_call_queue(now=ist(TODAY, 18, 58)) == 1
     c = call_row(confirmed["id"])
-    assert (c["status"], c["attempt"], c["elevenlabs_conversation_id"], c["sip_call_id"]) == (
-        "CALLING", 1, "conv_1", "sip_1")
+    assert (c["status"], c["attempt"], c["elevenlabs_conversation_id"], c["twilio_call_sid"]) == (
+        "CALLING", 1, "conv_1", "CA1")
     assert c["started_at"] == ist(TODAY, 18, 58)
 
     started = el.started[0]
@@ -239,7 +239,7 @@ def test_call_initiation_failure(el, confirmed, reason, status):
     calls.process_call_queue(now=ist(TODAY, 18, 0))
     event = {"type": "call_initiation_failure", "data": {
         "agent_id": "agent_1", "conversation_id": "conv_1", "failure_reason": reason,
-        "metadata": {"type": "sip", "body": {"sip_status_code": 486}},
+        "metadata": {"type": "twilio", "body": {"CallStatus": "busy"}},
     }}
     calls.handle_webhook(event, now=ist(TODAY, 18, 1))
     c = call_row(confirmed["id"])
@@ -382,19 +382,20 @@ def test_outbound_call_request_shape(el_settings, monkeypatch):
 
     def fake_post(url, headers, json, timeout):
         sent.update(url=url, headers=headers, json=json)
-        return FakeResponse(200, {"success": True, "message": "ok", "conversation_id": "c1", "sip_call_id": "s1"})
+        return FakeResponse(200, {"success": True, "message": "ok", "conversation_id": "c1", "callSid": "CA123"})
 
     monkeypatch.setattr(calls.httpx, "post", fake_post)
     assert calls.is_configured()
     result = calls.start_outbound_call("+919876543210", {"patient_name": "Priya"})
-    assert result == {"conversation_id": "c1", "sip_call_id": "s1"}
-    assert sent["url"] == "https://api.elevenlabs.io/v1/convai/sip-trunk/outbound-call"
+    assert result == {"conversation_id": "c1", "twilio_call_sid": "CA123"}
+    assert sent["url"] == "https://api.elevenlabs.io/v1/convai/twilio/outbound-call"
     assert sent["headers"] == {"xi-api-key": "xi_key"}
     assert sent["json"] == {
         "agent_id": "agent_123",
         "agent_phone_number_id": "phnum_456",
         "to_number": "+919876543210",
         "conversation_initiation_client_data": {"dynamic_variables": {"patient_name": "Priya"}},
+        "telephony_call_config": {"ringing_timeout_secs": 30},
     }
 
 
@@ -518,7 +519,7 @@ def test_get_conversation_http_error(el_settings, monkeypatch):
 
 
 def test_outbound_call_http_error_even_if_body_claims_success(el_settings, monkeypatch):
-    body = {"success": True, "conversation_id": "c1", "sip_call_id": "s1"}
+    body = {"success": True, "conversation_id": "c1", "callSid": "CA1"}
     monkeypatch.setattr(calls.httpx, "post", lambda *a, **k: FakeResponse(400, body))
     with pytest.raises(calls.ElevenLabsError, match="HTTP 400"):
         calls.start_outbound_call("+919876543210", {})
@@ -534,3 +535,72 @@ def test_webhook_signed_but_invalid_json(client):
     body = b"{not json"
     r = client.post("/api/webhooks/elevenlabs", content=body, headers={"elevenlabs-signature": sign(body)})
     assert r.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# Twilio (spec §8): rejected calls and trial mode
+# ---------------------------------------------------------------------------
+
+def test_rejected_call_stores_elevenlabs_message(el, confirmed, monkeypatch):
+    def reject(to_number, dynamic_variables):
+        raise calls.ElevenLabsError("Twilio: the number is unverified")
+
+    monkeypatch.setattr(calls, "start_outbound_call", reject)
+    calls.process_call_queue(now=ist(TODAY, 18, 0))
+    c = call_row(confirmed["id"])
+    assert (c["status"], c["failure_reason"]) == ("FAILED", "Twilio: the number is unverified")
+
+
+def test_success_false_message_is_the_error(el_settings, monkeypatch):
+    monkeypatch.setattr(calls.httpx, "post", lambda *a, **k: FakeResponse(200, {"success": False, "message": "Trunk busy"}))
+    with pytest.raises(calls.ElevenLabsError) as exc:
+        calls.start_outbound_call("+919876543210", {})
+    assert str(exc.value) == "Trunk busy"
+
+
+@pytest.fixture
+def trial(monkeypatch):
+    s = get_settings()
+    monkeypatch.setattr(s, "twilio_trial_mode", True)
+    monkeypatch.setattr(s, "verified_test_numbers", "+919812345678, +91 98765 00000")
+    return s
+
+
+def test_trial_mode_unverified_number_goes_straight_to_form(el, confirmed, trial):
+    """Spec §16: trial mode, booking with an unverified number -> no call attempted, form sent instead."""
+    assert calls.process_call_queue(now=ist(TODAY, 18, 0)) == 0
+    assert el.started == []
+    c = call_row(confirmed["id"])
+    assert (c["status"], c["attempt"], c["next_retry_at"]) == ("FAILED", 0, None)
+    assert "not a verified test number" in c["failure_reason"]
+    assert el.exhausted == [c["id"]]
+    assert calls.process_call_queue(now=ist(TODAY, 18, 1)) == 0  # not picked up again
+
+
+def test_trial_mode_verified_number_is_called(el, slots, doctor, trial):
+    appt = booking.create_appointment(book(slots[0], phone="+919812345678"), now=NOON)
+    booking.confirm(appt["id"], doctor["id"], now=NOON)
+    assert calls.process_call_queue(now=NOON) == 1
+    assert el.started[0]["to"] == "+919812345678"
+
+
+def test_trial_mode_mixed_queue(el, slots, doctor, trial):
+    verified = booking.create_appointment(book(slots[0], phone="+919876500000"), now=NOON)
+    unverified = booking.create_appointment(book(slots[1], phone="+919811111111"), now=NOON)
+    for a in (verified, unverified):
+        booking.confirm(a["id"], doctor["id"], now=NOON)
+    assert calls.process_call_queue(now=NOON) == 1
+    assert [x["to"] for x in el.started] == ["+919876500000"]
+    assert call_row(unverified["id"])["status"] == "FAILED"
+
+
+def test_trial_mode_off_calls_any_number(el, confirmed, monkeypatch):
+    monkeypatch.setattr(get_settings(), "twilio_trial_mode", False)
+    monkeypatch.setattr(get_settings(), "verified_test_numbers", "")
+    assert calls.process_call_queue(now=NOON) == 1
+
+
+def test_verified_numbers_parsing(monkeypatch):
+    s = get_settings()
+    monkeypatch.setattr(s, "verified_test_numbers", " +919812345678 ,+91 98765 00000,, ")
+    assert s.verified_numbers == {"+919812345678", "+919876500000"}

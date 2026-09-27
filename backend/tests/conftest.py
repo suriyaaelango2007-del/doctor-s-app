@@ -17,6 +17,8 @@ os.environ.update(
     SUPABASE_JWT_SECRET="",
     EMAIL_API_KEY="",
     LLM_API_KEY="",
+    TWILIO_TRIAL_MODE="false",
+    VERIFIED_TEST_NUMBERS="",
     LLM_MODEL="claude-opus-5",
     ENVIRONMENT="test",
     SCHEDULER_ENABLED="false",

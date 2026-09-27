@@ -1,6 +1,6 @@
 # Clinic AI Intake — V1 Build Spec
 
-A web app for a single specialist clinic. Patients book tomorrow's appointment on the website, the doctor confirms it, and an AI voice assistant (ElevenLabs) calls the patient to collect their problem. The doctor sees a clean summary on the dashboard before the visit.
+A web app for a single specialist clinic. Patients book tomorrow's appointment on the website, the doctor confirms it, and an AI voice assistant (ElevenLabs, calling through Twilio) calls the patient to collect their problem. The doctor sees a clean summary on the dashboard before the visit.
 
 ---
 
@@ -10,7 +10,8 @@ A web app for a single specialist clinic. Patients book tomorrow's appointment o
 - Patient booking website (no patient login)
 - Doctor dashboard (single doctor, email/password login)
 - Email notifications (patient + doctor)
-- AI voice call via ElevenLabs Agents, triggered on confirmation
+- AI voice call via ElevenLabs Agents over Twilio, triggered on confirmation
+- Prototype: Twilio trial account, calls only to Twilio-verified test numbers
 - Summary generated from the call transcript
 - Fallback intake form (email link) if the call is not answered
 - Scheduled jobs: doctor reminder, auto-cancel, call retry, form fallback
@@ -29,7 +30,7 @@ Returning-patient handling, visit reminders, follow-up calls, report uploads, Wh
 | Scheduler | APScheduler inside the FastAPI process |
 | Database + auth | Supabase (Postgres + Supabase Auth) |
 | Voice agent | ElevenLabs Agents |
-| Telephony | SIP trunk from Exotel or Plivo, connected to ElevenLabs |
+| Telephony | Twilio (native ElevenLabs integration). Prototype runs on a Twilio trial account with verified numbers only |
 | Email | AWS SES or Resend |
 | Summary LLM | Claude API (or any LLM with JSON output) |
 | Timezone | All business rules in `Asia/Kolkata` (IST) |
@@ -188,7 +189,7 @@ create table calls (
     check (status in ('QUEUED','CALLING','COMPLETED','NO_ANSWER','FAILED','FORM_SENT','FORM_SUBMITTED')),
   attempt int not null default 0,
   elevenlabs_conversation_id text,
-  sip_call_id text,
+  twilio_call_sid text,
   started_at timestamptz,
   ended_at timestamptz,
   duration_seconds int,
@@ -269,13 +270,13 @@ Use a database transaction with row locking for confirm/reject/auto-cancel so th
 ### Setup (one-time, in ElevenLabs dashboard)
 1. Create an Agent. Paste the system prompt from section 9.
 2. Set languages: Tamil, English, Hindi. Test Tamil voice quality with real speakers.
-3. Register the SIP trunk (Exotel or Plivo) under Phone Numbers. Note the `agent_phone_number_id`.
+3. In Twilio, get a phone number (the free trial number is fine). In ElevenLabs → Phone Numbers → Import from Twilio, enter the number, Twilio Account SID and Auth Token. ElevenLabs configures Twilio automatically. Note the `agent_phone_number_id`.
 4. Configure the post-call webhook URL → `https://<backend>/api/webhooks/elevenlabs` and save the webhook secret.
 5. Enable call recording only if you need it; set retention (e.g. 30 days).
 
 ### Starting a call (`services/calls.py`)
 ```http
-POST https://api.elevenlabs.io/v1/convai/sip-trunk/outbound-call
+POST https://api.elevenlabs.io/v1/convai/twilio/outbound-call
 xi-api-key: <ELEVENLABS_API_KEY>
 Content-Type: application/json
 
@@ -292,16 +293,34 @@ Content-Type: application/json
       "language": "ta",
       "appointment_id": "<uuid>"
     }
+  },
+  "telephony_call_config": {
+    "ringing_timeout_secs": 30
   }
 }
 ```
-Save the returned `conversation_id` and `sip_call_id` on the `calls` row, set status `CALLING`, increment `attempt`.
+Response:
+```json
+{ "success": true, "message": "...", "conversation_id": "...", "callSid": "CA..." }
+```
+Save `conversation_id` and `callSid` (as `twilio_call_sid`) on the `calls` row, set status `CALLING`, increment `attempt`. If `success` is false, set `FAILED` with the `message` as `failure_reason`.
 
 ### Call queue
 - On confirm, insert a `calls` row with `QUEUED`.
 - A worker job runs every 30 seconds, picks `QUEUED` rows (and `NO_ANSWER` rows whose `next_retry_at` has passed), and starts calls.
 - Limit concurrent calls to your ElevenLabs plan's concurrency (config: `MAX_CONCURRENT_CALLS`).
 - Never start a call after `LAST_CALL_START`.
+- If `TWILIO_TRIAL_MODE=true` and the patient's number is not in `VERIFIED_TEST_NUMBERS`, skip the call and send the fallback form directly (a trial account cannot call unverified numbers).
+
+### Prototype testing with a Twilio trial account
+- Add every tester's phone under Twilio Console → Phone Numbers → Verified Caller IDs, and list the same numbers in `VERIFIED_TEST_NUMBERS`.
+- Enable India under Twilio Console → Voice → Geo Permissions, or calls to +91 numbers will fail.
+- Trial calls play a short Twilio trial message first and the person must press a key before the agent starts. Tell testers to expect this.
+- Caller ID will be the Twilio (usually US) number, not an Indian number.
+- Trial credit is limited, so keep test calls short.
+
+### Going live (after the prototype)
+Replace Twilio with an Indian provider (Exotel or Plivo SIP trunk) so patients see an Indian caller ID. Only the phone-number import, the outbound-call endpoint (`/v1/convai/sip-trunk/outbound-call`) and the call-ID column change; the rest of the flow stays the same.
 
 ### Handling results (`routers/webhooks.py`)
 1. Verify the webhook signature with the shared secret. Reject if invalid or timestamp too old.
@@ -445,6 +464,10 @@ ELEVENLABS_API_KEY=
 ELEVENLABS_AGENT_ID=
 ELEVENLABS_PHONE_NUMBER_ID=
 ELEVENLABS_WEBHOOK_SECRET=
+TWILIO_ACCOUNT_SID=               # only needed if the backend looks up call status in Twilio
+TWILIO_AUTH_TOKEN=
+TWILIO_TRIAL_MODE=true
+VERIFIED_TEST_NUMBERS=+919876543210,+919812345678
 LLM_API_KEY=
 EMAIL_PROVIDER=ses|resend
 EMAIL_API_KEY=
@@ -469,7 +492,7 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=
 - Verify ElevenLabs webhook signatures.
 - Recording/transcript retention policy (e.g. auto-delete recordings after 30 days via a nightly job).
 - Rate-limit the booking endpoint (per IP and per phone).
-- Check ElevenLabs' data-processing terms and where call data is stored.
+- Check ElevenLabs' and Twilio's data-processing terms and where call data is stored.
 
 ---
 
@@ -481,7 +504,7 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=
 | 2 | Booking flow | Patient can book; double booking blocked; closed after 18:00 |
 | 3 | Doctor dashboard | Login, list pending, confirm/reject work; blocked after 19:00 |
 | 4 | Emails + scheduled jobs | All emails in section 11 send; 18:30 reminder and 19:00 auto-cancel work |
-| 5 | ElevenLabs call | Confirm triggers a real call; webhook stores transcript |
+| 5 | ElevenLabs + Twilio call | Confirm triggers a real call to a verified test number; webhook stores transcript |
 | 6 | Summary + compliance | Summary JSON shows on dashboard; compliance flag works |
 | 7 | Retry + form fallback | No-answer → retry → form; form answers produce a summary |
 | 8 | Hardening | Security items done; tests pass; Tamil calls tested |
@@ -496,6 +519,7 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=
 - Pending at 19:00 → `AUTO_CANCELLED` + email
 - Confirm at 18:58 → call starts; retry not scheduled past 19:50 → form sent instead
 - No call ever starts after 19:50
+- Trial mode: booking with an unverified number → no call attempted, form sent instead
 
 ### Concurrency
 - Two patients booking the same slot at once → only one succeeds

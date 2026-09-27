@@ -70,9 +70,13 @@ class Settings(BaseSettings):
     llm_model: str = "claude-opus-5"
 
     # Email — empty EMAIL_API_KEY means "log to console"
-    email_provider: str = "resend"
+    email_provider: str = "resend"  # resend | smtp
     email_api_key: str = ""
     email_from: str = "Clinic <onboarding@resend.dev>"
+    smtp_host: str = "smtp.gmail.com"
+    smtp_port: int = 587
+    smtp_username: str = ""
+    smtp_password: str = ""  # Gmail: an App Password (Google Account -> Security -> App passwords)
 
     frontend_url: str = "http://localhost:3000"
     max_concurrent_calls: int = 3

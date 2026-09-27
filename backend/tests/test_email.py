@@ -63,3 +63,78 @@ def test_console_mode_without_key(monkeypatch):
     monkeypatch.setattr(get_settings(), "email_api_key", "")
     assert email.send("p@test.in", MSG) is True
     assert last_notification()["status"] == "SENT"
+
+
+# ---------------------------------------------------------------------------
+# SMTP (Gmail)
+# ---------------------------------------------------------------------------
+
+class FakeSMTP:
+    instances: list["FakeSMTP"] = []
+    fail_login = False
+    fail_send = False
+
+    def __init__(self, host, port, timeout):
+        self.host, self.port, self.calls, self.sent = host, port, [], []
+        FakeSMTP.instances.append(self)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def starttls(self, context):
+        self.calls.append("starttls")
+
+    def login(self, user, password):
+        if FakeSMTP.fail_login:
+            raise email.smtplib.SMTPAuthenticationError(535, b"Username and Password not accepted")
+        self.calls.append(("login", user, password))
+
+    def send_message(self, msg):
+        if FakeSMTP.fail_send:
+            raise email.smtplib.SMTPRecipientsRefused({"x": (550, b"no")})
+        self.sent.append(msg)
+
+
+@pytest.fixture
+def gmail(monkeypatch):
+    s = get_settings()
+    monkeypatch.setattr(s, "email_provider", "smtp")
+    monkeypatch.setattr(s, "smtp_username", "clinic@gmail.com")
+    monkeypatch.setattr(s, "smtp_password", "abcd efgh ijkl mnop")
+    monkeypatch.setattr(s, "email_from", "Test Clinic <clinic@gmail.com>")
+    FakeSMTP.instances, FakeSMTP.fail_login, FakeSMTP.fail_send = [], False, False
+    monkeypatch.setattr(email.smtplib, "SMTP", FakeSMTP)
+    return FakeSMTP
+
+
+def test_smtp_sends_text_and_html(gmail):
+    assert email.send("p@test.in", MSG) is True
+    smtp = gmail.instances[0]
+    assert (smtp.host, smtp.port) == ("smtp.gmail.com", 587)
+    assert smtp.calls == ["starttls", ("login", "clinic@gmail.com", "abcd efgh ijkl mnop")]
+    msg = smtp.sent[0]
+    assert msg["To"] == "p@test.in" and msg["From"] == "Test Clinic <clinic@gmail.com>" and msg["Subject"] == "s"
+    assert [p.get_content_type() for p in msg.iter_parts()] == ["text/plain", "text/html"]
+    n = last_notification()
+    assert n["status"] == "SENT" and n["provider_message_id"].endswith("@gmail.com>")
+
+
+def test_smtp_bad_password_is_explained(gmail):
+    gmail.fail_login = True
+    assert email.send("p@test.in", MSG) is False
+    assert "App Password" in last_notification()["error"]
+
+
+def test_smtp_send_error_recorded(gmail):
+    gmail.fail_send = True
+    assert email.send("p@test.in", MSG) is False
+    assert last_notification()["error"].startswith("SMTP error")
+
+
+def test_smtp_without_password_uses_console(gmail, monkeypatch):
+    monkeypatch.setattr(get_settings(), "smtp_password", "")
+    assert email.send("p@test.in", MSG) is True
+    assert gmail.instances == []

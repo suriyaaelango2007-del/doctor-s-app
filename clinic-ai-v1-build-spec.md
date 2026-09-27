@@ -155,9 +155,11 @@ create table slots (
   unique (doctor_id, date, start_time)
 );
 
+-- One row per phone number = the contact. Family members often share a phone,
+-- so the name/email/language used for a visit live on the appointment (below).
 create table patients (
   id uuid primary key default gen_random_uuid(),
-  name text not null,
+  name text not null,                            -- latest name booked with this phone
   phone text not null unique,                    -- E.164, e.g. +919876543210
   email text not null,
   preferred_language text not null default 'en' check (preferred_language in ('ta','en','hi')),
@@ -168,6 +170,9 @@ create table appointments (
   id uuid primary key default gen_random_uuid(),
   slot_id uuid not null references slots(id),
   patient_id uuid not null references patients(id),
+  patient_name text not null,                    -- as entered for this booking
+  patient_email text not null,                   -- as entered for this booking
+  preferred_language text not null check (preferred_language in ('ta','en','hi')),
   status text not null default 'PENDING'
     check (status in ('PENDING','CONFIRMED','REJECTED','AUTO_CANCELLED')),
   consent_ai_call boolean not null,
@@ -241,7 +246,7 @@ A job at 00:05 IST creates tomorrow's slots from `schedule_templates` (skip if t
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/api/slots` | Tomorrow's available slots. Empty list after 18:00 |
-| POST | `/api/appointments` | Body: `slot_id, name, phone, email, preferred_language, consent_ai_call`. Reject if after 18:00, slot not tomorrow, slot taken, or consent false. Upsert patient by phone. Create `PENDING`. Email patient ("request received") and doctor ("new booking") |
+| POST | `/api/appointments` | Body: `slot_id, name, phone, email, preferred_language, consent_ai_call`. Reject if after 18:00, slot not tomorrow, slot taken, or consent false. Upsert patient by phone (the contact). Create `PENDING`, storing the name, email and language on the appointment so a later booking with the same phone and a different name (family members) doesn't rename it; emails, the AI call and the summary use the appointment's values. Email patient ("request received") and doctor ("new booking") |
 | GET | `/api/forms/{token}` | Returns questions + appointment info if token valid and not expired/used |
 | POST | `/api/forms/{token}` | Saves answers, marks used, generates summary with `source = FORM` |
 

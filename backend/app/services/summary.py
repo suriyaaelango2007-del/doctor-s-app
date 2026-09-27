@@ -214,11 +214,10 @@ def check_compliance(transcript_text: str) -> ComplianceResult:
 # ---------------------------------------------------------------------------
 
 _PENDING_SQL = """
-select c.id as call_id, c.appointment_id, c.transcript, p.preferred_language, d.specialty
+select c.id as call_id, c.appointment_id, c.transcript, a.preferred_language, d.specialty
 from calls c
 join appointments a on a.id = c.appointment_id
 join slots s on s.id = a.slot_id
-join patients p on p.id = a.patient_id
 join doctors d on d.id = s.doctor_id
 where c.status = 'COMPLETED'
   and not exists (select 1 from summaries sm where sm.appointment_id = c.appointment_id)

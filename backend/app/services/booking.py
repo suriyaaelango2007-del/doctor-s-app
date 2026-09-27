@@ -173,10 +173,9 @@ def _appt_info(conn: psycopg.Connection, appointment_id: UUID) -> tuple[ApptInfo
     """Template data + patient email for an appointment."""
     row = conn.execute(
         """
-        select p.name as patient_name, p.email as patient_email,
+        select a.patient_name, a.patient_email,
                s.date, s.start_time, d.name as doctor_name, d.clinic_name
         from appointments a
-        join patients p on p.id = a.patient_id
         join slots s on s.id = a.slot_id
         join doctors d on d.id = s.doctor_id
         where a.id = %s
@@ -231,11 +230,14 @@ def create_appointment(req: BookingRequest, now: datetime | None = None) -> dict
 
             appt = conn.execute(
                 """
-                insert into appointments (slot_id, patient_id, consent_ai_call, consent_at)
-                values (%s, %s, %s, %s)
+                insert into appointments
+                  (slot_id, patient_id, patient_name, patient_email, preferred_language,
+                   consent_ai_call, consent_at)
+                values (%s, %s, %s, %s, %s, %s, %s)
                 returning id, status, created_at
                 """,
-                (req.slot_id, patient["id"], req.consent_ai_call, now),
+                (req.slot_id, patient["id"], req.name, req.email, req.preferred_language,
+                 req.consent_ai_call, now),
             ).fetchone()
 
             info, patient_email = _appt_info(conn, appt["id"])
@@ -388,7 +390,7 @@ def send_doctor_reminder(now: datetime | None = None) -> int:
 _LIST_SQL = """
 select a.id, a.status, a.created_at, a.decided_at, a.reject_reason,
        s.id as slot_id, s.date, s.start_time, s.end_time,
-       p.name as patient_name, p.phone as patient_phone, p.preferred_language,
+       a.patient_name, p.phone as patient_phone, a.preferred_language,
        c.status as call_status, c.attempt as call_attempt,
        sm.summary->>'chief_complaint' as summary_preview,
        sm.compliance_flag,
@@ -426,9 +428,7 @@ def get_appointment_detail(appointment_id: UUID, doctor_id: UUID) -> dict[str, A
     with transaction() as conn:
         appt = conn.execute(
             """
-            select a.*, s.date, s.start_time, s.end_time,
-                   p.name as patient_name, p.phone as patient_phone,
-                   p.email as patient_email, p.preferred_language
+            select a.*, s.date, s.start_time, s.end_time, p.phone as patient_phone
             from appointments a
             join slots s on s.id = a.slot_id
             join patients p on p.id = a.patient_id

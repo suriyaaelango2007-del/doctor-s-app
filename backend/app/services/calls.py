@@ -151,7 +151,7 @@ def dynamic_variables(row: dict[str, Any]) -> dict[str, Any]:
 
 _CLAIM_SQL = """
 select c.id as call_id, c.attempt, a.id as appointment_id, s.date, s.start_time,
-       p.name as patient_name, p.phone, p.preferred_language,
+       a.patient_name, p.phone, a.preferred_language,
        d.name as doctor_name, d.clinic_name, d.specialty
 from calls c
 join appointments a on a.id = c.appointment_id

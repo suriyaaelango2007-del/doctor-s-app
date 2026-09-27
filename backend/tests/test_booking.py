@@ -448,3 +448,41 @@ def test_doctor_api_responses(client, slots, doctor):
             assert [s["blocked"] for s in r.json()] == [False, False, True, False]
     finally:
         app.dependency_overrides.clear()
+
+
+# ---------------------------------------------------------------------------
+# Family members sharing one phone number
+# ---------------------------------------------------------------------------
+
+def test_shared_phone_each_booking_keeps_its_own_name(slots, doctor):
+    mohan = booking.create_appointment(req(slots[0]["id"], name="Mohan", email="mohan@test.in"), now=NOON)
+    priya = booking.create_appointment(
+        req(slots[1]["id"], name="Priya", email="priya2@test.in", preferred_language="hi"), now=NOON)
+
+    rows = {r["id"]: r for r in booking.list_appointments(doctor["id"], TOMORROW)}
+    assert rows[mohan["id"]]["patient_name"] == "Mohan"
+    assert rows[priya["id"]]["patient_name"] == "Priya"
+    assert rows[priya["id"]]["preferred_language"] == "hi"
+    assert rows[mohan["id"]]["patient_phone"] == rows[priya["id"]]["patient_phone"] == "+919876543210"
+
+    detail = booking.get_appointment_detail(mohan["id"], doctor["id"])
+    assert (detail["patient_name"], detail["patient_email"], detail["preferred_language"]) == (
+        "Mohan", "mohan@test.in", "ta")
+
+    # one contact row for the phone
+    with db.transaction() as conn:
+        assert conn.execute("select count(*) as n from patients").fetchone()["n"] == 1
+        recipients = [r["recipient"] for r in conn.execute(
+            "select recipient from notifications where type = 'BOOKING_RECEIVED' order by sent_at")]
+    assert recipients == ["mohan@test.in", "priya2@test.in"]
+
+
+def test_shared_phone_confirm_email_goes_to_that_booking(slots, doctor):
+    mohan = booking.create_appointment(req(slots[0]["id"], name="Mohan", email="mohan@test.in"), now=NOON)
+    booking.create_appointment(req(slots[1]["id"], name="Priya", email="priya2@test.in"), now=NOON)
+    booking.confirm(mohan["id"], doctor["id"], now=NOON)
+    with db.transaction() as conn:
+        n = conn.execute(
+            "select recipient from notifications where type = 'CONFIRMED' and appointment_id = %s",
+            (mohan["id"],)).fetchone()
+    assert n["recipient"] == "mohan@test.in"

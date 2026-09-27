@@ -712,3 +712,11 @@ def test_get_twilio_call_status_errors_return_none(twilio_creds, monkeypatch):
 def test_get_twilio_call_status_without_creds(monkeypatch):
     monkeypatch.setattr(get_settings(), "twilio_account_sid", "")
     assert calls.get_twilio_call_status("CA9") is None
+
+
+def test_shared_phone_call_uses_the_booking_name(el, slots, doctor):
+    a = booking.create_appointment(book(slots[0], name="Mohan"), now=NOON)
+    booking.create_appointment(book(slots[1], name="Priya"), now=NOON)  # same phone, later booking
+    booking.confirm(a["id"], doctor["id"], now=NOON)
+    calls.process_call_queue(now=NOON)
+    assert el.started[0]["vars"]["patient_name"] == "Mohan"

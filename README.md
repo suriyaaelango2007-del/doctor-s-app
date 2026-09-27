@@ -66,6 +66,11 @@ about calls stuck in *Calling* for 15+ minutes, in case a webhook was missed.
 Without ElevenLabs keys the app works as before and confirmed calls simply stay **Call queued**.
 
 ### One-time setup
+**Shortcut:** put `ELEVENLABS_API_KEY`, `TWILIO_ACCOUNT_SID` and `TWILIO_AUTH_TOKEN` in `backend/.env`, then run
+`uv run python -m scripts.setup_voice all` in `backend/` — it creates the agent (steps 2) and imports the Twilio
+number (step 1), writes both ids into `.env`, and checks the Twilio trial / verified-number settings.
+Only the webhook (step 4) has to be done by hand.
+
 1. **Phone number (Twilio).** Sign up at twilio.com (the free trial number is fine for the prototype).
    In ElevenLabs → *Phone Numbers* → *Import from Twilio*, enter the number, Twilio Account SID and Auth Token —
    ElevenLabs configures Twilio automatically. Copy the phone number id → `ELEVENLABS_PHONE_NUMBER_ID`.

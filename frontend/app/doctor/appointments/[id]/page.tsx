@@ -130,7 +130,13 @@ export default function AppointmentPage() {
                     {c.next_retry_at && (
                       <p className="mt-1 text-muted">Retrying at {formatDateTime(c.next_retry_at)}</p>
                     )}
-                    <Transcript transcript={c.transcript} />
+                    {c.data_purged_at ? (
+                      <p className="mt-1 text-muted">
+                        Transcript and recording deleted on {formatDateTime(c.data_purged_at)} (privacy retention).
+                      </p>
+                    ) : (
+                      <Transcript transcript={c.transcript} />
+                    )}
                   </li>
                 ))}
               </ul>

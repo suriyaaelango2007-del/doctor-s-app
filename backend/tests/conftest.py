@@ -65,6 +65,14 @@ def database():
 
 
 @pytest.fixture(autouse=True)
+def reset_rate_limits():
+    from app.ratelimit import BOOKING_LIMITER, FORM_LIMITER
+
+    BOOKING_LIMITER.reset()
+    FORM_LIMITER.reset()
+
+
+@pytest.fixture(autouse=True)
 def clean_tables(database):
     with db.transaction() as conn:
         conn.execute(f"truncate {', '.join(TABLES)}, auth.users cascade")

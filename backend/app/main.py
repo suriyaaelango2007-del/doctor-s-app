@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 from app import db, time_rules
 from app.config import get_settings
 from app.jobs import scheduler
+from app.security import SecurityHeadersMiddleware, install_log_redaction
 from app.routers import doctor, forms, public, webhooks
 from app.services import calls, summary
 from app.services.booking import BookingError
@@ -37,7 +38,17 @@ async def lifespan(app: FastAPI):
         db.close_pool()
 
 
-app = FastAPI(title="Clinic AI Intake", lifespan=lifespan)
+_production = get_settings().environment == "production"
+# No public API docs in production (they map every endpoint for an attacker).
+app = FastAPI(
+    title="Clinic AI Intake",
+    lifespan=lifespan,
+    docs_url=None if _production else "/docs",
+    redoc_url=None if _production else "/redoc",
+    openapi_url=None if _production else "/openapi.json",
+)
+app.add_middleware(SecurityHeadersMiddleware)
+install_log_redaction()
 
 app.add_middleware(
     CORSMiddleware,

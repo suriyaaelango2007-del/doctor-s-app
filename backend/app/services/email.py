@@ -16,6 +16,7 @@ import httpx
 
 from app.config import get_settings
 from app.db import transaction
+from app.security import mask_email
 from app.services.email_templates import Email
 
 log = logging.getLogger("clinic.email")
@@ -94,10 +95,10 @@ def send(to: str, email: Email, appointment_id: UUID | str | None = None) -> boo
         message_id = _deliver(to, email)
     except EmailError as exc:
         status, error = "FAILED", str(exc)[:500]
-        log.warning("Email %s to %s failed: %s", email.type, to, exc)
+        log.warning("Email %s to %s failed: %s", email.type, mask_email(to), exc)
     except Exception as exc:  # noqa: BLE001
         status, error = "FAILED", str(exc)[:500]
-        log.exception("Email %s to %s failed", email.type, to)
+        log.exception("Email %s to %s failed", email.type, mask_email(to))
 
     try:
         with transaction() as conn:

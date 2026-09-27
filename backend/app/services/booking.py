@@ -14,7 +14,7 @@ from uuid import UUID
 import psycopg
 from psycopg import errors
 
-from app import time_rules
+from app import config, time_rules
 from app.db import transaction
 from app.services import email, email_templates
 from app.services.email_templates import ApptInfo
@@ -40,6 +40,10 @@ class Conflict(BookingError):
 
 class Closed(BookingError):
     status_code = 422
+
+
+class TooMany(BookingError):
+    status_code = 429
 
 
 # ---------------------------------------------------------------------------
@@ -229,6 +233,21 @@ def create_appointment(req: BookingRequest, now: datetime | None = None) -> dict
                 """,
                 (req.name, req.phone, req.email, req.preferred_language),
             ).fetchone()
+
+            # Families share phones, but cap active bookings per phone per day (spec §14).
+            # The upsert above row-locks this patient, so concurrent bookings count correctly.
+            active = conn.execute(
+                """
+                select count(*) as n from appointments a join slots s on s.id = a.slot_id
+                where a.patient_id = %s and s.date = %s and a.status in ('PENDING','CONFIRMED')
+                """,
+                (patient["id"], slot["date"]),
+            ).fetchone()["n"]
+            if active >= config.MAX_BOOKINGS_PER_PHONE_PER_DAY:
+                raise TooMany(
+                    f"This phone number already has {active} bookings for tomorrow. "
+                    "Please call the clinic if you need more."
+                )
 
             appt = conn.execute(
                 """
@@ -443,7 +462,7 @@ def get_appointment_detail(appointment_id: UUID, doctor_id: UUID) -> dict[str, A
         calls = conn.execute(
             """
             select id, status, attempt, started_at, ended_at, duration_seconds,
-                   transcript, failure_reason, next_retry_at, created_at
+                   transcript, failure_reason, next_retry_at, created_at, data_purged_at
             from calls where appointment_id = %s order by created_at
             """,
             (appointment_id,),

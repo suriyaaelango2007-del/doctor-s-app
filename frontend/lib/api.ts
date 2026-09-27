@@ -89,6 +89,7 @@ export interface CallRow {
   failure_reason: string | null;
   next_retry_at: string | null;
   created_at: string;
+  data_purged_at: string | null;
 }
 
 export interface AppointmentDetail {

@@ -28,6 +28,10 @@ RINGING_TIMEOUT_SECS = 30
 SUMMARY_WORKER_SECONDS = 30
 WEBHOOK_TOLERANCE_SECONDS = 30 * 60  # matches the ElevenLabs SDK
 
+# Hardening (spec §14)
+MAX_BOOKINGS_PER_PHONE_PER_DAY = 3  # families share phones
+RETENTION_JOB = time(2, 30)  # nightly clean-up of old transcripts / recordings / form answers
+
 # Specialty questions injected into the AI agent prompt and the fallback form.
 SPECIALTY_QUESTIONS: dict[str, list[str]] = {
     "dermatology": [
@@ -80,6 +84,11 @@ class Settings(BaseSettings):
 
     frontend_url: str = "http://localhost:3000"
     max_concurrent_calls: int = 3
+
+    # Behind a reverse proxy (Render, Nginx, …) set true so rate limits use X-Forwarded-For.
+    trust_proxy_headers: bool = False
+    # Delete call transcripts / recordings and form answers after this many days (spec §14).
+    retention_days: int = 30
 
     # Dev only: shift the app clock by N minutes to test deadline behaviour.
     environment: str = "development"

@@ -3,13 +3,14 @@
 from datetime import date, datetime, time
 from typing import Literal
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
+from app.ratelimit import FORM_LIMITER, limit
 from app.services import forms
 from app.services.forms import FormAnswers
 
-router = APIRouter(prefix="/api/forms", tags=["forms"])
+router = APIRouter(prefix="/api/forms", tags=["forms"], dependencies=[Depends(limit(FORM_LIMITER, "form"))])
 
 
 class FormInfo(BaseModel):

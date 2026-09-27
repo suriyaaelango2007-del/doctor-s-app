@@ -3,10 +3,11 @@ from typing import Literal
 from uuid import UUID
 
 import phonenumbers
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
 from app.db import transaction
+from app.ratelimit import BOOKING_LIMITER, limit
 from app.services import booking
 
 router = APIRouter(prefix="/api", tags=["public"])
@@ -84,6 +85,11 @@ def get_slots():
     return booking.available_slots()
 
 
-@router.post("/appointments", response_model=BookingOut, status_code=201)
+@router.post(
+    "/appointments",
+    response_model=BookingOut,
+    status_code=201,
+    dependencies=[Depends(limit(BOOKING_LIMITER, "booking"))],
+)
 def create_appointment(body: BookingIn):
     return booking.create_appointment(booking.BookingRequest(**body.model_dump()))

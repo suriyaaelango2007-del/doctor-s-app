@@ -13,7 +13,7 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
 from app import config
-from app.services import booking, calls, forms, summary
+from app.services import booking, calls, forms, retention, summary
 
 log = logging.getLogger("clinic.jobs")
 
@@ -64,6 +64,7 @@ def build_scheduler() -> BackgroundScheduler:
         max_instances=1,
     )
     sched.add_job(_safe(forms.send_pending_forms), _cron(config.CALL_WINDOW_END), id="form_fallback")
+    sched.add_job(_safe(retention.purge_old_data), _cron(config.RETENTION_JOB), id="retention")
     return sched
 
 

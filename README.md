@@ -20,7 +20,7 @@ patient to collect their problem before the visit. Full spec: [clinic-ai-v1-buil
 | 5 | ElevenLabs + Twilio call (queue worker, webhook, retries, missed-webhook recovery) | ✅ code + tests; needs your ElevenLabs + Twilio setup |
 | 6 | Summary + compliance check (Claude) | ✅ code + tests; needs `LLM_API_KEY` |
 | 7 | Retry + form fallback (intake form in Tamil / English / Hindi) | ✅ |
-| 8 | Hardening (rate limits, retention, Tamil testing) | — |
+| 8 | Hardening: rate limits, data retention, security pass, AI no-advice tests (24/24 in ta/hi/en) | ✅ (real Tamil phone call with a native speaker still to do) |
 
 ## Setup
 
@@ -140,6 +140,35 @@ Tamil, English and Hindi. Answers are stored exactly as written and become the a
 ("from intake form" on the dashboard); the call badge shows **Form sent** → **Form received**.
 
 The Tamil and Hindi wording lives in `frontend/lib/formText.ts` — have a native speaker review it before launch.
+
+## Email without a domain (Gmail)
+
+Resend's test sender can only mail your own address. Until you own a domain, send through Gmail:
+1. Google Account → Security → turn on **2-Step Verification** → **App passwords** → create one (16 characters).
+2. In `backend/.env`:
+   ```
+   EMAIL_PROVIDER=smtp
+   SMTP_USERNAME=you@gmail.com
+   SMTP_PASSWORD=abcd efgh ijkl mnop
+   EMAIL_FROM=Test Clinic <you@gmail.com>
+   ```
+3. Restart the backend. Gmail allows ~500 emails/day; early emails may land in spam until opened.
+
+## Hardening — milestone 8
+
+- **Rate limits:** booking — 10 attempts/hour per IP and max 3 active bookings per phone per day (families);
+  form links — 30 requests/hour per IP. Over the limit → HTTP 429 with `Retry-After`.
+  Behind a reverse proxy set `TRUST_PROXY_HEADERS=true` so the real client IP is used.
+- **Data retention:** nightly at 02:30 IST, calls older than `RETENTION_DAYS` (30) have their ElevenLabs
+  conversation (transcript + audio) deleted and our transcript cleared; raw form answers are cleared.
+  The doctor's summary is kept.
+- **Security:** security headers on API and website, `Cache-Control: no-store` on doctor and form endpoints,
+  form tokens redacted from access logs, patient emails masked in logs, API docs disabled when
+  `ENVIRONMENT=production`, `Referrer-Policy: no-referrer` on the form page.
+- **AI no-advice tests (spec §16):** `uv run python -m scripts.test_agent_safety` simulates patients asking the
+  7 medical questions + the chest-pain emergency in Tamil, Hindi and English against the real agent and has
+  Claude grade each transcript (writes `safety-report.json`). Costs a little ElevenLabs + Anthropic credit.
+  Still do a real phone call in Tamil with a native speaker before launch (voice quality, accents).
 
 ## Daily timeline (IST, day before the visit)
 All in `backend/app/config.py`; every check lives in `backend/app/time_rules.py`.
